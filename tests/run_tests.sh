@@ -280,7 +280,7 @@ test_io_sched_latency() {
     if command -v fio &> /dev/null; then
         fio --name=test --directory=$test_dir --rw=randrw --bs=4k \
             --size=50M --numjobs=4 --runtime=$((TEST_DURATION - 5))s \
-            --time_based --ioengine=sync --direct=1 --quiet &
+            --time_based --ioengine=sync --direct=1 &
         local fio_pid=$!
     else
         log_warn "fio not available, using dd"

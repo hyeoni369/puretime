@@ -51,3 +51,20 @@ You can check the trace logs on "/var/log/puretime/trace_*.jsonl".
 ```console
 cat /var/log/puretime/trace_*.jsonl | head -10
 ```
+
+### **6. Test trace result**
+#### 전체 테스트 실행 (약 90초 소요)
+```console
+cd ~/puretime
+sudo ./tests/run_tests.sh
+```
+
+#### 기존 trace 파일 분석만 실행
+```console
+python3 tests/analyze_trace.py /var/log/puretime/trace_*.jsonl
+```
+
+#### JSON으로 결과 내보내기
+```console
+python3 tests/analyze_trace.py /var/log/puretime/trace_*.jsonl -o results.json
+```
