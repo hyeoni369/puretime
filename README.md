@@ -1,5 +1,22 @@
 ## **How to use**
 
+### **0. Pre-requirements**
+#### Disable NIC's offloadings
+```sh
+ip a  # 인터페이스 확인
+ethtool -k <인터페이스>  # 인터페이스 현재 설정 확인
+ethtool -K <인터페이스> tso off gso off gro off lro off  # offload disable
+```
+
+#### Enable NVMe's scheduler
+```sh
+cat /sys/block/<device>/queue/scheduler  # Block device의 스케줄러 확인
+# none이 아니라 다른게 (대괄호로) 선택되어있으면 Pass
+# 만약 [none] 이면, 다른 스케줄러 선택해줘야 함 ex) [none] mq-deadline
+sudo -i
+sudo echo mq-deadline > /sys/block/<device>/queue/scheduler
+```
+
 ### **1. Clone your new repository**
 
 Clone your newly created repository to your local machine:
