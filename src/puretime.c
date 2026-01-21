@@ -92,8 +92,7 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 static const char *event_type_str(int type)
 {
     switch (type) {
-    case EVENT_SCHED_WAKEUP:      return "sched_wakeup";
-    case EVENT_SCHED_WAKEUP_NEW:  return "sched_wakeup_new";
+    case EVENT_SCHED_ENQUEUE:     return "sched_enqueue";
     case EVENT_SCHED_SWITCH:      return "sched_switch";
     case EVENT_NET_DEV_QUEUE:     return "net_dev_queue";
     case EVENT_NET_DEV_START_XMIT: return "net_dev_start_xmit";

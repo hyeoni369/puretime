@@ -7,8 +7,7 @@
 /* Event types for all traced subsystems */
 enum event_type {
     /* CPU Scheduling Events */
-    EVENT_SCHED_WAKEUP      = 0,
-    EVENT_SCHED_WAKEUP_NEW  = 1,
+    EVENT_SCHED_ENQUEUE     = 0,
     EVENT_SCHED_SWITCH      = 2,
 
     /* Network TX Events */

@@ -66,8 +66,8 @@ static __always_inline __u64 get_cgroup_id_from_socket(struct sock *sk)
  * CPU Scheduling Tracepoints
  * ============================================================ */
 
-SEC("tp_btf/sched_wakeup")
-int BPF_PROG(handle_sched_wakeup, struct task_struct *p)
+SEC("fentry/enqueue_task")
+int BPF_PROG(handle_enqueue_task, struct rq *rq, struct task_struct *p, int flags)
 {
     struct sched_event *e;
 
@@ -78,43 +78,14 @@ int BPF_PROG(handle_sched_wakeup, struct task_struct *p)
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = get_task_cgroup_id(p);
     e->hdr.cpu = bpf_get_smp_processor_id();
-    e->hdr.event_type = EVENT_SCHED_WAKEUP;
+    e->hdr.event_type = EVENT_SCHED_ENQUEUE;
 
     e->pid = BPF_CORE_READ(p, tgid);
     e->tid = BPF_CORE_READ(p, pid);
     bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm), BPF_CORE_READ(p, comm));
     e->is_switch_in = 0;
 
-    /* Clear prev fields (not used for wakeup) */
-    e->prev_cgroup_id = 0;
-    e->prev_pid = 0;
-    e->prev_tid = 0;
-    __builtin_memset(e->prev_comm, 0, sizeof(e->prev_comm));
-
-    bpf_ringbuf_submit(e, 0);
-    return 0;
-}
-
-SEC("tp_btf/sched_wakeup_new")
-int BPF_PROG(handle_sched_wakeup_new, struct task_struct *p)
-{
-    struct sched_event *e;
-
-    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
-        return 0;
-
-    e->hdr.timestamp_ns = bpf_ktime_get_ns();
-    e->hdr.cgroup_id = get_task_cgroup_id(p);
-    e->hdr.cpu = bpf_get_smp_processor_id();
-    e->hdr.event_type = EVENT_SCHED_WAKEUP_NEW;
-
-    e->pid = BPF_CORE_READ(p, tgid);
-    e->tid = BPF_CORE_READ(p, pid);
-    bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm), BPF_CORE_READ(p, comm));
-    e->is_switch_in = 0;
-
-    /* Clear prev fields */
+    /* Clear prev fields (not used for enqueue) */
     e->prev_cgroup_id = 0;
     e->prev_pid = 0;
     e->prev_tid = 0;
