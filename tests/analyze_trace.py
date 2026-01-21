@@ -80,7 +80,7 @@ class PureTimeAnalyzer:
 
     def __init__(self):
         # Pending events for correlation
-        self.sched_wakeups: Dict[int, dict] = {}  # tid -> event
+        self.sched_enqueues: Dict[int, dict] = {}  # tid -> event
         self.net_queued: Dict[int, dict] = {}  # skb_addr -> event
         self.block_inserted: Dict[int, dict] = {}  # request_addr -> event
         self.block_issued: Dict[int, dict] = {}  # request_addr -> event
@@ -111,8 +111,8 @@ class PureTimeAnalyzer:
         self.event_counts[event_type] += 1
 
         # Scheduler events
-        if event_type in ('sched_wakeup', 'sched_wakeup_new'):
-            self._handle_sched_wakeup(event)
+        if event_type == 'sched_enqueue':
+            self._handle_sched_enqueue(event)
         elif event_type == 'sched_switch':
             self._handle_sched_switch(event)
 
@@ -130,23 +130,23 @@ class PureTimeAnalyzer:
         elif event_type == 'block_rq_complete':
             self._handle_block_complete(event)
 
-    def _handle_sched_wakeup(self, event: dict):
-        """Handle sched_wakeup and sched_wakeup_new events"""
+    def _handle_sched_enqueue(self, event: dict):
+        """Handle sched_enqueue events"""
         tid = event.get('tid')
         if tid is not None:
-            self.sched_wakeups[tid] = event
+            self.sched_enqueues[tid] = event
 
     def _handle_sched_switch(self, event: dict):
-        """Handle sched_switch event - correlate with wakeup"""
+        """Handle sched_switch event - correlate with enqueue"""
         tid = event.get('tid')
         if tid is None:
             return
 
-        # Find matching wakeup for this tid
-        wakeup = self.sched_wakeups.pop(tid, None)
+        # Find matching enqueue for this tid
+        enqueue = self.sched_enqueues.pop(tid, None)
 
-        if wakeup:
-            latency = event['timestamp_ns'] - wakeup['timestamp_ns']
+        if enqueue:
+            latency = event['timestamp_ns'] - enqueue['timestamp_ns']
             if latency >= 0:
                 self.runq_latency.add(latency)
                 self.correlated_sched += 1
@@ -244,7 +244,7 @@ class PureTimeAnalyzer:
             print(f"  {event_type}: {count:,}")
 
         # Run Queue Latency
-        print("\n[Run Queue Latency (sched_wakeup -> sched_switch)]")
+        print("\n[Run Queue Latency (sched_enqueue -> sched_switch)]")
         if self.runq_latency.count > 0:
             stats = self.runq_latency.to_dict()
             print(f"  Samples:    {stats['count']:,}")
