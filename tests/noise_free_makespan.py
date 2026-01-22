@@ -152,7 +152,8 @@ class NoiseFreeAnalyzer:
         cgroup_counts: Dict[int, int] = defaultdict(int)
 
         with open(filepath, 'r') as f:
-            for line in tqdm(f, desc="Detecting cgroups"):
+            lines = f.readlines()
+            for line in tqdm(lines, desc="Detecting cgroups"):
                 if not line.strip():
                     continue
                 try:
