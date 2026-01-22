@@ -418,7 +418,7 @@ class NoiseFreeAnalyzer:
     def _compute_results(self, target_cgroups: Set[int]) -> Dict[int, CgroupMakespanResult]:
         """결과 집계"""
         results = {}
-        for cgroup_id in target_cgroups:
+        for cgroup_id in tqdm(target_cgroups, desc="Computing results for cgroups"):
             waits = self.cgroup_waits[cgroup_id]
             first_ts, last_ts = self.cgroup_time_range.get(cgroup_id, (0, 0))
 
