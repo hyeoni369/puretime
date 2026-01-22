@@ -129,14 +129,22 @@ class NoiseFreeAnalyzer:
         # cgroup별 시간 범위
         self.cgroup_time_range: Dict[int, Tuple[int, int]] = {}
 
-    def analyze_file(self, filepath: str) -> Dict[int, CgroupMakespanResult]:
-        """트레이스 파일 분석"""
+    def analyze_file(self, filepath: str, target_cgroups: Optional[Set[int]] = None) -> Dict[int, CgroupMakespanResult]:
+        """트레이스 파일 분석
+
+        Args:
+            filepath: 트레이스 파일 경로
+            target_cgroups: 분석할 cgroup ID 집합. None이면 자동 감지
+        """
         # Pass 1: cgroup 자동 감지 및 시간 범위 수집
         cgroup_counts = self._detect_cgroups(filepath)
-        target_cgroups = {
-            cg for cg, cnt in cgroup_counts.items()
-            if cnt >= self.min_events and cg != 0 and cg != 1
-        }
+
+        if target_cgroups is None:
+            # 자동 감지 모드
+            target_cgroups = {
+                cg for cg, cnt in cgroup_counts.items()
+                if cnt >= self.min_events and cg != 0 and cg != 1
+            }
 
         if not target_cgroups:
             print(f"Warning: No cgroups found with >= {self.min_events} events", file=sys.stderr)
@@ -493,6 +501,17 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
             print(f"    Softirq (self):    {format_ns(result.softirq_self)}")
 
 
+def load_cgroups_from_file(filepath: str) -> Set[int]:
+    """파일에서 cgroup ID 목록 읽기 (한 줄에 하나씩)"""
+    cgroups = set()
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                cgroups.add(int(line))
+    return cgroups
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Noise-Free Makespan Analyzer for PureTime traces'
@@ -510,22 +529,26 @@ def main():
         help='Output results in JSON format'
     )
     parser.add_argument(
-        '-c', '--cgroup',
-        type=int,
-        help='Analyze specific cgroup ID only'
+        '-c', '--cgroups-file',
+        type=str,
+        help='Path to file containing cgroup IDs (one per line)'
     )
 
     args = parser.parse_args()
 
-    analyzer = NoiseFreeAnalyzer(min_events=args.min_events)
-    results = analyzer.analyze_file(args.trace_file)
+    # cgroup 목록 로드
+    target_cgroups = None
+    if args.cgroups_file:
+        target_cgroups = load_cgroups_from_file(args.cgroups_file)
 
-    if args.cgroup:
-        if args.cgroup in results:
-            results = {args.cgroup: results[args.cgroup]}
-        else:
-            print(f"Error: cgroup {args.cgroup} not found in trace", file=sys.stderr)
-            sys.exit(1)
+    analyzer = NoiseFreeAnalyzer(min_events=args.min_events)
+    results = analyzer.analyze_file(args.trace_file, target_cgroups)
+
+    # 경고: 파일에 있지만 트레이스에서 결과가 없는 cgroup
+    if target_cgroups:
+        missing = target_cgroups - set(results.keys())
+        for cg in missing:
+            print(f"Warning: cgroup {cg} not found in trace", file=sys.stderr)
 
     if not results:
         print("No results to display", file=sys.stderr)
