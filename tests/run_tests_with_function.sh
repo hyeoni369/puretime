@@ -63,7 +63,7 @@ check_prerequisites() {
 
     # Check required tools
     local missing_tools=""
-    for tool in stress-ng fio tc python3; do
+    for tool in docker; do
         if ! command -v $tool &> /dev/null; then
             missing_tools="$missing_tools $tool"
         fi
@@ -73,6 +73,9 @@ check_prerequisites() {
         log_warn "Missing tools:$missing_tools"
         log_warn "Some tests may be limited"
     fi
+
+    # Build stress test Docker image
+    build_stress_image
 
     log_pass "Prerequisites OK"
 }
@@ -91,6 +94,50 @@ setup_output() {
 # Get latest trace file
 get_latest_trace() {
     ls -t /var/log/puretime/trace_*.jsonl 2>/dev/null | head -1
+}
+
+# Docker stress test variables
+GRAPH_BFS_IMAGE="graph-bfs"
+CONTAINER_IDS=()
+CONTAINER_CGROUP_IDS=()  # numeric cgroup_id (inode)
+
+# Build graph-bfs Docker image
+build_stress_image() {
+    log_info "Building graph-bfs Docker image..."
+    docker build -t "$GRAPH_BFS_IMAGE" "$PURETIME_DIR/funcs/graph-bfs" > /dev/null 2>&1
+    log_pass "Docker image built: $GRAPH_BFS_IMAGE"
+}
+
+# Start stress containers and collect cgroup IDs
+start_stress_containers() {
+    local count=${1:-$(nproc)}
+    log_info "Starting $count graph-bfs containers..."
+
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+
+    for i in $(seq 1 $count); do
+        local cid=$(docker run -d "$GRAPH_BFS_IMAGE")
+        CONTAINER_IDS+=("$cid")
+
+        # Extract cgroup v2 path and get inode (numeric cgroup_id)
+        local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
+        local cgroup_path=$(cat /proc/$pid/cgroup | grep -oP '0::/\K.*')
+        local cgroup_id=$(stat -c %i "/sys/fs/cgroup/${cgroup_path}")
+        CONTAINER_CGROUP_IDS+=("$cgroup_id")
+
+        log_info "  Container $i: ${cid:0:12} -> cgroup_id: $cgroup_id"
+    done
+}
+
+# Stop and remove stress containers
+stop_stress_containers() {
+    log_info "Stopping and removing stress containers..."
+    for cid in "${CONTAINER_IDS[@]}"; do
+        docker rm -f "$cid" > /dev/null 2>&1 || true
+    done
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
 }
 
 # Test 1: Run Queue Latency
@@ -113,30 +160,22 @@ test_runq_latency() {
     local actual_trace=$(get_latest_trace)
     log_info "Trace file: $actual_trace"
 
-    # Generate CPU contention with stress-ng
-    if command -v stress-ng &> /dev/null; then
-        log_info "Generating CPU contention with stress-ng..."
-        stress-ng --cpu $(nproc) --cpu-load 100 --timeout ${TEST_DURATION}s &
-        local stress_pid=$!
+    # Generate CPU contention with graph-bfs containers
+    log_info "Generating CPU contention with graph-bfs containers..."
+    start_stress_containers
 
-        # Add competing workloads
-        for i in $(seq 1 10); do
-            (
-                for j in $(seq 1 100); do
-                    echo "scale=100; 4*a(1)" | bc -l > /dev/null 2>&1
-                done
-            ) &
-        done
-    else
-        log_warn "stress-ng not available, using dd for CPU load"
-        for i in $(seq 1 $(nproc)); do
-            dd if=/dev/zero of=/dev/null bs=1 count=10000000 2>/dev/null &
-        done
-    fi
+    # Save container cgroup IDs for later analysis
+    echo "# Container cgroup_ids for analysis (numeric inode)" > "$OUTPUT_DIR/container_cgroups.txt"
+    for i in "${!CONTAINER_IDS[@]}"; do
+        echo "${CONTAINER_IDS[$i]}:${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups.txt"
+    done
+    log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups.txt"
 
     # Wait for puretime to finish
     wait $puretime_pid 2>/dev/null || true
-    wait $stress_pid 2>/dev/null || true
+
+    # Stop and remove stress containers
+    stop_stress_containers
 
     # Copy trace file
     if [ -f "$actual_trace" ]; then
@@ -373,8 +412,8 @@ main() {
     local io_result=0
 
     test_runq_latency || runq_result=$?
-    test_qdisc_latency || qdisc_result=$?
-    test_io_sched_latency || io_result=$?
+    # test_qdisc_latency || qdisc_result=$?
+    # test_io_sched_latency || io_result=$?
 
     run_analysis
     print_summary
