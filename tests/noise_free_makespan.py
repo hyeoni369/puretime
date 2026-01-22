@@ -6,7 +6,7 @@ Analyzes eBPF trace data to calculate noise-free makespan by identifying
 and removing wait times caused by other tenants (cgroups).
 
 Wait 계산 원칙 (모든 타입 동일):
-- CPU: 내 wakeup 이후 다른 프로세스 switch-in 시점 -> 내 switch-in 시점
+- CPU: 내 enqueue 이후 다른 프로세스 switch-in 시점 -> 내 switch-in 시점
 - Network: 내 queue 이후 다른 패킷 dequeue 시점 -> 내 dequeue 시점
 - Block I/O: 내 insert 이후 다른 요청 issue 시점 -> 내 issue 시점
 """
@@ -71,7 +71,7 @@ class CgroupMakespanResult:
 
 # Pending 이벤트: 시작은 됐지만 아직 완료되지 않은 이벤트
 @dataclass
-class PendingWakeup:
+class PendingEnqueue:
     timestamp_ns: int
     cgroup_id: int
     cpu: int
@@ -107,7 +107,7 @@ class NoiseFreeAnalyzer:
         self.min_events = min_events
 
         # Pending 이벤트 추적
-        self.pending_wakeups: Dict[int, PendingWakeup] = {}  # tid -> PendingWakeup
+        self.pending_enqueues: Dict[int, PendingEnqueue] = {}  # tid -> PendingEnqueue
         self.pending_packets: Dict[int, PendingPacket] = {}  # skb_addr -> PendingPacket
         self.pending_block_requests: Dict[int, PendingBlockRequest] = {}  # request_addr
         self.pending_softirqs: Dict[int, PendingSoftirq] = {}  # cpu -> PendingSoftirq
@@ -187,8 +187,8 @@ class NoiseFreeAnalyzer:
                 event_type = event.get('event', '')
 
                 # 스케줄러 이벤트
-                if event_type in ('sched_wakeup', 'sched_wakeup_new'):
-                    self._handle_wakeup(event, target_cgroups)
+                if event_type == 'sched_enqueue':
+                    self._handle_enqueue(event, target_cgroups)
                 elif event_type == 'sched_switch':
                     self._handle_switch(event, target_cgroups)
 
@@ -210,12 +210,12 @@ class NoiseFreeAnalyzer:
                 elif event_type == 'softirq_exit':
                     self._handle_softirq_exit(event, target_cgroups)
 
-    def _handle_wakeup(self, event: dict, target_cgroups: Set[int]):
-        """wakeup 이벤트: Pending에 저장"""
+    def _handle_enqueue(self, event: dict, target_cgroups: Set[int]):
+        """enqueue 이벤트: Pending에 저장"""
         tid = event.get('tid')
         if tid is None:
             return
-        self.pending_wakeups[tid] = PendingWakeup(
+        self.pending_enqueues[tid] = PendingEnqueue(
             timestamp_ns=event['timestamp_ns'],
             cgroup_id=event['cgroup_id'],
             cpu=event.get('cpu', 0),
@@ -223,24 +223,24 @@ class NoiseFreeAnalyzer:
         )
 
     def _handle_switch(self, event: dict, target_cgroups: Set[int]):
-        """switch 이벤트: 내 wakeup 이후 다른 프로세스가 먼저 switch-in한 구간 = Wait"""
+        """switch 이벤트: 내 enqueue 이후 다른 프로세스가 먼저 switch-in한 구간 = Wait"""
         tid = event.get('tid')
         cgroup_id = event.get('cgroup_id')
         cpu = event.get('cpu', 0)
         timestamp = event['timestamp_ns']
 
-        # 이 switch에 해당하는 wakeup 찾기
-        wakeup = self.pending_wakeups.pop(tid, None)
+        # 이 switch에 해당하는 enqueue 찾기
+        enqueue = self.pending_enqueues.pop(tid, None)
 
-        if wakeup and cgroup_id in target_cgroups:
-            # 내 wakeup 이후, 내 switch 이전에 다른 cgroup이 switch-in한 구간 찾기
-            my_wakeup_ts = wakeup.timestamp_ns
+        if enqueue and cgroup_id in target_cgroups:
+            # 내 enqueue 이후, 내 switch 이전에 다른 cgroup이 switch-in한 구간 찾기
+            my_enqueue_ts = enqueue.timestamp_ns
             for hist_event in self.cpu_switch_history[cpu]:
                 other_switch_ts = hist_event['timestamp_ns']
                 other_cgroup = hist_event['cgroup_id']
 
-                # 내 wakeup 이후 && 다른 cgroup이 switch-in한 경우
-                if my_wakeup_ts < other_switch_ts < timestamp and other_cgroup != cgroup_id:
+                # 내 enqueue 이후 && 다른 cgroup이 switch-in한 경우
+                if my_enqueue_ts < other_switch_ts < timestamp and other_cgroup != cgroup_id:
                     # Wait 구간: 다른 프로세스 switch-in 시점 ~ 내 switch-in 시점
                     self.cgroup_waits[cgroup_id].add_cpu_wait(other_switch_ts, timestamp)
 
