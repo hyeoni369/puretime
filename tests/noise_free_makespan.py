@@ -174,41 +174,52 @@ class NoiseFreeAnalyzer:
         return cgroup_counts
 
     def _calculate_waits(self, filepath: str, target_cgroups: Set[int]):
-        """Pass 2: 이벤트를 순차적으로 처리하며 Wait 시간 계산"""
+        """Pass 2: 이벤트를 순차적으로 처리하며 Wait 시간 계산
+
+        Note: Multi-CPU 환경에서 Ring Buffer의 이벤트 순서가 보장되지 않으므로
+        timestamp 기준으로 정렬 후 처리해야 함
+        """
+        # 1. 모든 이벤트 읽기
+        events = []
         with open(filepath, 'r') as f:
             for line in f:
                 if not line.strip():
                     continue
                 try:
-                    event = json.loads(line)
+                    events.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
 
-                event_type = event.get('event', '')
+        # 2. timestamp 기준 정렬 (Multi-CPU 환경에서 순서 보장)
+        events.sort(key=lambda e: e.get('timestamp_ns', 0))
 
-                # 스케줄러 이벤트
-                if event_type == 'sched_enqueue':
-                    self._handle_enqueue(event, target_cgroups)
-                elif event_type == 'sched_switch':
-                    self._handle_switch(event, target_cgroups)
+        # 3. 정렬된 이벤트 순차 처리
+        for event in events:
+            event_type = event.get('event', '')
 
-                # 네트워크 이벤트
-                elif event_type == 'net_dev_queue':
-                    self._handle_net_queue(event, target_cgroups)
-                elif event_type == 'net_dev_start_xmit':
-                    self._handle_net_dequeue(event, target_cgroups)
+            # 스케줄러 이벤트
+            if event_type == 'sched_enqueue':
+                self._handle_enqueue(event, target_cgroups)
+            elif event_type == 'sched_switch':
+                self._handle_switch(event, target_cgroups)
 
-                # Block I/O 이벤트
-                elif event_type == 'block_rq_insert':
-                    self._handle_block_insert(event, target_cgroups)
-                elif event_type == 'block_rq_issue':
-                    self._handle_block_issue(event, target_cgroups)
+            # 네트워크 이벤트
+            elif event_type == 'net_dev_queue':
+                self._handle_net_queue(event, target_cgroups)
+            elif event_type == 'net_dev_start_xmit':
+                self._handle_net_dequeue(event, target_cgroups)
 
-                # Softirq 이벤트
-                elif event_type == 'softirq_entry':
-                    self._handle_softirq_entry(event, target_cgroups)
-                elif event_type == 'softirq_exit':
-                    self._handle_softirq_exit(event, target_cgroups)
+            # Block I/O 이벤트
+            elif event_type == 'block_rq_insert':
+                self._handle_block_insert(event, target_cgroups)
+            elif event_type == 'block_rq_issue':
+                self._handle_block_issue(event, target_cgroups)
+
+            # Softirq 이벤트
+            elif event_type == 'softirq_entry':
+                self._handle_softirq_entry(event, target_cgroups)
+            elif event_type == 'softirq_exit':
+                self._handle_softirq_exit(event, target_cgroups)
 
     def _handle_enqueue(self, event: dict, target_cgroups: Set[int]):
         """enqueue 이벤트: Pending에 저장"""

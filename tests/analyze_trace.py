@@ -219,18 +219,30 @@ class PureTimeAnalyzer:
                 self.io_total_latency.add(latency)
 
     def analyze_file(self, filepath: str):
-        """Process a JSONL trace file"""
+        """Process a JSONL trace file
+
+        Note: Multi-CPU 환경에서 Ring Buffer의 이벤트 순서가 보장되지 않으므로
+        timestamp 기준으로 정렬 후 처리해야 함
+        """
+        # 1. 모든 이벤트 읽기
+        events = []
         with open(filepath, 'r') as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    event = json.loads(line)
-                    self.process_event(event)
+                    events.append(json.loads(line))
                 except json.JSONDecodeError as e:
                     print(f"Warning: Invalid JSON at line {line_num}: {e}",
                           file=sys.stderr)
+
+        # 2. timestamp 기준 정렬 (Multi-CPU 환경에서 순서 보장)
+        events.sort(key=lambda e: e.get('timestamp_ns', 0))
+
+        # 3. 정렬된 이벤트 순차 처리
+        for event in events:
+            self.process_event(event)
 
     def print_summary(self):
         """Print analysis summary"""
