@@ -6,4 +6,4 @@ WORKDIR /app
 COPY function.py .
 
 # Default command
-CMD ["python", "function.py", "50000", "100"]
+CMD ["python", "function.py", "500000", "5"]

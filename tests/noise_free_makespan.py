@@ -484,21 +484,8 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
         print("PureTime Noise-Free Makespan Analysis")
         print("=" * 60)
 
-        for cgroup_id, result in sorted(results.items()):
-            wait_pct = (result.total_unique_wait / result.original_makespan * 100) \
-                if result.original_makespan > 0 else 0
-
-            print(f"\n[Cgroup {cgroup_id}]")
-            print(f"  Original Makespan:   {format_ns(result.original_makespan)}")
-            print(f"  Noise-Free Makespan: {format_ns(result.noise_free_makespan)}")
-            print(f"  Total Wait:          {format_ns(result.total_unique_wait)} ({wait_pct:.2f}%)")
-            print()
-            print(f"  Wait Breakdown:")
-            print(f"    CPU Wait:          {format_ns(result.wait_cpu)}")
-            print(f"    Network Wait:      {format_ns(result.wait_net)}")
-            print(f"    Block I/O Wait:    {format_ns(result.wait_bio)}")
-            print(f"    Softirq (other):   {format_ns(result.softirq_other)}")
-            print(f"    Softirq (self):    {format_ns(result.softirq_self)}")
+        total_noise_free = sum(r.noise_free_makespan for r in results.values())
+        print(f'Avg Noise-Free Makespan: {format_ns(total_noise_free // len(results))} ')
 
 
 def load_cgroups_from_file(filepath: str) -> Set[int]:

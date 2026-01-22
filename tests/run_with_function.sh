@@ -13,7 +13,7 @@ ANALYZER="$SCRIPT_DIR/analyze_trace.py"
 MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
 OUTPUT_DIR="${1:-/tmp/puretime_test_$(date +%Y%m%d_%H%M%S)}"
-TEST_DURATION=30
+TEST_DURATION=60
 RESULTS_FILE="$OUTPUT_DIR/test_results.txt"
 
 # Colors for output
@@ -111,14 +111,14 @@ build_stress_image() {
 
 # Start stress containers and collect cgroup IDs
 start_stress_containers() {
-    local count=${1:-$(nproc)}
+    local count=20
     log_info "Starting $count graph-bfs containers..."
 
     CONTAINER_IDS=()
     CONTAINER_CGROUP_IDS=()
 
     for i in $(seq 1 $count); do
-        local cid=$(docker run -d --cpuset-cpus=0,1 "$GRAPH_BFS_IMAGE")
+        local cid=$(docker run -d --cpuset-cpus=0 "$GRAPH_BFS_IMAGE")
         CONTAINER_IDS+=("$cid")
 
         # Extract cgroup v2 path and get inode (numeric cgroup_id)
@@ -390,7 +390,8 @@ main() {
     local io_result=0
 
     test_runq_latency || runq_result=$?
-    python3 "$MAKESPAN" -c "$OUTPUT_DIR/container_cgroups.txt"
+    local actual_trace=$(get_latest_trace)
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups.txt"
 
     # test_qdisc_latency || qdisc_result=$?
     # test_io_sched_latency || io_result=$?
