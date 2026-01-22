@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PURETIME_DIR="$(dirname "$SCRIPT_DIR")"
 PURETIME_BIN="$PURETIME_DIR/src/puretime"
 ANALYZER="$SCRIPT_DIR/analyze_trace.py"
+MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
 OUTPUT_DIR="${1:-/tmp/puretime_test_$(date +%Y%m%d_%H%M%S)}"
 TEST_DURATION=30
@@ -365,25 +366,6 @@ test_runq_latency() {
 #     fi
 # }
 
-# Run Python analyzer on all traces
-run_analysis() {
-    echo ""
-    log_info "=== Running Full Analysis ==="
-    echo "" >> "$RESULTS_FILE"
-    echo "Full Analysis" >> "$RESULTS_FILE"
-    echo "-------------" >> "$RESULTS_FILE"
-
-    # Combine all trace files
-    cat $OUTPUT_DIR/trace_*.jsonl > $OUTPUT_DIR/combined_trace.jsonl 2>/dev/null || true
-
-    if [ -f "$OUTPUT_DIR/combined_trace.jsonl" ] && [ -s "$OUTPUT_DIR/combined_trace.jsonl" ]; then
-        log_info "Running Python analyzer..."
-        python3 "$ANALYZER" "$OUTPUT_DIR/combined_trace.jsonl" \
-            -o "$OUTPUT_DIR/analysis_results.json" 2>&1 | tee -a "$RESULTS_FILE"
-    else
-        log_warn "No trace data to analyze"
-    fi
-}
 
 # Print summary
 print_summary() {
@@ -396,9 +378,6 @@ print_summary() {
     echo ""
     echo "Trace files:"
     ls -lh $OUTPUT_DIR/trace_*.jsonl 2>/dev/null || echo "  No trace files"
-    echo ""
-    echo "To re-analyze traces:"
-    echo "  python3 $ANALYZER $OUTPUT_DIR/combined_trace.jsonl"
 }
 
 # Main execution
@@ -411,10 +390,11 @@ main() {
     local io_result=0
 
     test_runq_latency || runq_result=$?
+    python3 "$MAKESPAN" -c "$OUTPUT_DIR/container_cgroups.txt"
+
     # test_qdisc_latency || qdisc_result=$?
     # test_io_sched_latency || io_result=$?
 
-    run_analysis
     print_summary
 
     # Exit with error if all tests failed
