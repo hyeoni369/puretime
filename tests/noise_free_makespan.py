@@ -183,10 +183,10 @@ class NoiseFreeAnalyzer:
         timestamp 기준으로 정렬 후 처리해야 함
         """
         # 1. 모든 이벤트 읽기
-        print('Reading and sorting events...', end=' > ', flush=True)
         events = []
         with open(filepath, 'r') as f:
-            for line in f:
+            lines = f.readlines()
+            for line in tqdm(lines, desc="Reading events"):
                 if not line.strip():
                     continue
                 try:
@@ -196,7 +196,6 @@ class NoiseFreeAnalyzer:
 
         # 2. timestamp 기준 정렬 (Multi-CPU 환경에서 순서 보장)
         events.sort(key=lambda e: e.get('timestamp_ns', 0))
-        print('Done.')
 
         # 3. 정렬된 이벤트 순차 처리
         for event in tqdm(events, desc="Processing events"):
