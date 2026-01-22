@@ -165,9 +165,8 @@ test_runq_latency() {
     start_stress_containers
 
     # Save container cgroup IDs for later analysis
-    echo "# Container cgroup_ids for analysis (numeric inode)" > "$OUTPUT_DIR/container_cgroups.txt"
     for i in "${!CONTAINER_IDS[@]}"; do
-        echo "${CONTAINER_IDS[$i]}:${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups.txt"
+        echo "${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups.txt"
     done
     log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups.txt"
 
@@ -188,13 +187,13 @@ test_runq_latency() {
 
     # Analyze results
     log_info "Analyzing run queue latency..."
-    local wakeup_count=$(grep -c '"event":"sched_wakeup"' "$trace_file" 2>/dev/null || echo 0)
+    local enqueue_count=$(grep -c '"event":"sched_enqueue"' "$trace_file" 2>/dev/null || echo 0)
     local switch_count=$(grep -c '"event":"sched_switch"' "$trace_file" 2>/dev/null || echo 0)
 
-    echo "  sched_wakeup events: $wakeup_count" | tee -a "$RESULTS_FILE"
+    echo "  sched_enqueue events: $enqueue_count" | tee -a "$RESULTS_FILE"
     echo "  sched_switch events: $switch_count" | tee -a "$RESULTS_FILE"
 
-    if [ "$wakeup_count" -gt 100 ] && [ "$switch_count" -gt 100 ]; then
+    if [ "$enqueue_count" -gt 100 ] && [ "$switch_count" -gt 100 ]; then
         log_pass "Run queue events captured successfully"
         echo "Result: PASS" >> "$RESULTS_FILE"
         return 0
