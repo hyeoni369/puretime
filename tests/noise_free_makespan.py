@@ -16,6 +16,7 @@ import json
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
+from bisect import bisect_left, bisect_right
 from typing import Dict, List, Optional, Set, Tuple
 
 import portion as P
@@ -116,14 +117,14 @@ class NoiseFreeAnalyzer:
         # Per-cgroup wait intervals (portion 라이브러리)
         self.cgroup_waits: Dict[int, CgroupWaitIntervals] = defaultdict(CgroupWaitIntervals)
 
-        # CPU별 switch 히스토리 (CPU Wait 계산용)
-        self.cpu_switch_history: Dict[int, List[dict]] = defaultdict(list)
+        # CPU별 switch 히스토리 (CPU Wait 계산용) - (timestamp, event_dict) 튜플로 저장
+        self.cpu_switch_history: Dict[int, List[Tuple[int, dict]]] = defaultdict(list)
 
-        # Network dequeue 히스토리 (Network Wait 계산용)
-        self.net_dequeue_history: List[dict] = []
+        # Network dequeue 히스토리 (Network Wait 계산용) - (timestamp, event_dict) 튜플로 저장
+        self.net_dequeue_history: List[Tuple[int, dict]] = []
 
-        # Block issue 히스토리 (Block I/O Wait 계산용)
-        self.block_issue_history: List[dict] = []
+        # Block issue 히스토리 (Block I/O Wait 계산용) - (timestamp, event_dict) 튜플로 저장
+        self.block_issue_history: List[Tuple[int, dict]] = []
 
         # cgroup별 시간 범위
         self.cgroup_time_range: Dict[int, Tuple[int, int]] = {}
@@ -250,21 +251,26 @@ class NoiseFreeAnalyzer:
         if enqueue and cgroup_id in target_cgroups:
             # 내 enqueue 이후, 내 switch 이전에 다른 cgroup이 switch-in한 구간 찾기
             my_enqueue_ts = enqueue.timestamp_ns
-            for hist_event in self.cpu_switch_history[cpu]:
-                other_switch_ts = hist_event['timestamp_ns']
+            history = self.cpu_switch_history[cpu]
+
+            # Binary search로 범위 찾기: (my_enqueue_ts, timestamp)
+            left = bisect_right(history, (my_enqueue_ts,))  # > my_enqueue_ts
+            right = bisect_left(history, (timestamp,))      # < timestamp
+
+            for i in range(left, right):
+                other_switch_ts, hist_event = history[i]
                 other_cgroup = hist_event['cgroup_id']
 
-                # 내 enqueue 이후 && 다른 cgroup이 switch-in한 경우
-                if my_enqueue_ts < other_switch_ts < timestamp and other_cgroup != cgroup_id:
+                # 다른 cgroup이 switch-in한 경우
+                if other_cgroup != cgroup_id:
                     # Wait 구간: 다른 프로세스 switch-in 시점 ~ 내 switch-in 시점
                     self.cgroup_waits[cgroup_id].add_cpu_wait(other_switch_ts, timestamp)
 
         # 모든 switch를 CPU 히스토리에 기록 (다른 프로세스의 Wait 계산용)
-        self.cpu_switch_history[cpu].append({
-            'timestamp_ns': timestamp,
+        self.cpu_switch_history[cpu].append((timestamp, {
             'cgroup_id': cgroup_id,
             'tid': tid
-        })
+        }))
 
     def _handle_net_queue(self, event: dict, target_cgroups: Set[int]):
         """net_dev_queue: Pending에 저장"""
@@ -289,22 +295,24 @@ class NoiseFreeAnalyzer:
         if my_packet and my_packet.cgroup_id in target_cgroups:
             my_queue_ts = my_packet.timestamp_ns
 
-            # 내 queue 이후, 내 dequeue 이전에 다른 cgroup 패킷이 dequeue된 구간 찾기
-            for hist_event in self.net_dequeue_history:
-                other_dequeue_ts = hist_event['timestamp_ns']
+            # Binary search로 범위 찾기: (my_queue_ts, timestamp)
+            left = bisect_right(self.net_dequeue_history, (my_queue_ts,))  # > my_queue_ts
+            right = bisect_left(self.net_dequeue_history, (timestamp,))    # < timestamp
+
+            for i in range(left, right):
+                other_dequeue_ts, hist_event = self.net_dequeue_history[i]
                 other_cgroup = hist_event['cgroup_id']
 
-                # 내 queue 이후 && 다른 cgroup 패킷이 dequeue된 경우
-                if my_queue_ts < other_dequeue_ts < timestamp and other_cgroup != my_packet.cgroup_id:
+                # 다른 cgroup 패킷이 dequeue된 경우
+                if other_cgroup != my_packet.cgroup_id:
                     # Wait 구간: 다른 패킷 dequeue 시점 ~ 내 패킷 dequeue 시점
                     self.cgroup_waits[my_packet.cgroup_id].add_net_wait(other_dequeue_ts, timestamp)
 
         # 모든 dequeue를 히스토리에 기록
-        self.net_dequeue_history.append({
-            'timestamp_ns': timestamp,
+        self.net_dequeue_history.append((timestamp, {
             'cgroup_id': cgroup_id,
             'skb_addr': skb_addr
-        })
+        }))
 
         # Softirq 구간 내 이벤트 기록
         cpu = event.get('cpu', 0)
@@ -333,22 +341,24 @@ class NoiseFreeAnalyzer:
         if my_request and my_request.cgroup_id in target_cgroups:
             my_insert_ts = my_request.insert_timestamp_ns
 
-            # 내 insert 이후, 내 issue 이전에 다른 cgroup 요청이 issue된 구간 찾기
-            for hist_event in self.block_issue_history:
-                other_issue_ts = hist_event['timestamp_ns']
+            # Binary search로 범위 찾기: (my_insert_ts, timestamp)
+            left = bisect_right(self.block_issue_history, (my_insert_ts,))  # > my_insert_ts
+            right = bisect_left(self.block_issue_history, (timestamp,))     # < timestamp
+
+            for i in range(left, right):
+                other_issue_ts, hist_event = self.block_issue_history[i]
                 other_cgroup = hist_event['cgroup_id']
 
-                # 내 insert 이후 && 다른 cgroup 요청이 issue된 경우
-                if my_insert_ts < other_issue_ts < timestamp and other_cgroup != my_request.cgroup_id:
+                # 다른 cgroup 요청이 issue된 경우
+                if other_cgroup != my_request.cgroup_id:
                     # Wait 구간: 다른 요청 issue 시점 ~ 내 요청 issue 시점
                     self.cgroup_waits[my_request.cgroup_id].add_bio_wait(other_issue_ts, timestamp)
 
         # 모든 issue를 히스토리에 기록
-        self.block_issue_history.append({
-            'timestamp_ns': timestamp,
+        self.block_issue_history.append((timestamp, {
             'cgroup_id': cgroup_id,
             'request_addr': req_addr
-        })
+        }))
 
         # Softirq 구간 내 이벤트 기록
         cpu = event.get('cpu', 0)
