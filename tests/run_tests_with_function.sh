@@ -117,7 +117,7 @@ start_stress_containers() {
     CONTAINER_CGROUP_IDS=()
 
     for i in $(seq 1 $count); do
-        local cid=$(docker run -d "$GRAPH_BFS_IMAGE")
+        local cid=$(docker run -d --cpuset-cpus=0,1 "$GRAPH_BFS_IMAGE")
         CONTAINER_IDS+=("$cid")
 
         # Extract cgroup v2 path and get inode (numeric cgroup_id)
