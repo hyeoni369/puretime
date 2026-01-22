@@ -111,13 +111,13 @@ int BPF_PROG(handle_sched_switch, bool preempt,
     cgroup_id = get_task_cgroup_id(next);
     if (cgroup_id <= 1)
         return 0;  /* Ignore idle and root cgroups */
-    
-    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
-        return 0;
 
-    /* Case 1: prev가 preempted (TASK_RUNNING) → run queue 재진입 이벤트 */
+    /* prev가 preempted (TASK_RUNNING) → run queue 재진입 이벤트 */
     if (prev_state == 0) {  /* TASK_RUNNING = 0 */
+        e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+        if (!e)
+            return 0;
+
         e->hdr.timestamp_ns = bpf_ktime_get_ns();
         e->hdr.cgroup_id = cgroup_id;
         e->hdr.cpu = bpf_get_smp_processor_id();
@@ -135,27 +135,31 @@ int BPF_PROG(handle_sched_switch, bool preempt,
         __builtin_memset(e->prev_comm, 0, sizeof(e->prev_comm));
 
         bpf_ringbuf_submit(e, 0);
-        
-    } else {  /* Case 2: next가 switch in → sched_switch 이벤트 */
-        e->hdr.timestamp_ns = bpf_ktime_get_ns();
-        e->hdr.cgroup_id = cgroup_id;
-        e->hdr.cpu = bpf_get_smp_processor_id();
-        e->hdr.event_type = EVENT_SCHED_SWITCH;
-
-        /* Next task (switching in) */
-        e->pid = BPF_CORE_READ(next, tgid);
-        e->tid = BPF_CORE_READ(next, pid);
-        bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm), BPF_CORE_READ(next, comm));
-        e->is_switch_in = 1;
-
-        /* Previous task (switching out) */
-        e->prev_cgroup_id = get_task_cgroup_id(prev);
-        e->prev_pid = BPF_CORE_READ(prev, tgid);
-        e->prev_tid = BPF_CORE_READ(prev, pid);
-        bpf_probe_read_kernel_str(&e->prev_comm, sizeof(e->prev_comm), BPF_CORE_READ(prev, comm));
-
-        bpf_ringbuf_submit(e, 0);
     }
+    
+    /* next가 switch in → sched_switch 이벤트 */    
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (!e)
+        return 0;
+
+    e->hdr.timestamp_ns = bpf_ktime_get_ns();
+    e->hdr.cgroup_id = cgroup_id;
+    e->hdr.cpu = bpf_get_smp_processor_id();
+    e->hdr.event_type = EVENT_SCHED_SWITCH;
+
+    /* Next task (switching in) */
+    e->pid = BPF_CORE_READ(next, tgid);
+    e->tid = BPF_CORE_READ(next, pid);
+    bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm), BPF_CORE_READ(next, comm));
+    e->is_switch_in = 1;
+
+    /* Previous task (switching out) */
+    e->prev_cgroup_id = get_task_cgroup_id(prev);
+    e->prev_pid = BPF_CORE_READ(prev, tgid);
+    e->prev_tid = BPF_CORE_READ(prev, pid);
+    bpf_probe_read_kernel_str(&e->prev_comm, sizeof(e->prev_comm), BPF_CORE_READ(prev, comm));
+
+    bpf_ringbuf_submit(e, 0);
     
     return 0;
 }
