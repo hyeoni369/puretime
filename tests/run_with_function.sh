@@ -389,6 +389,7 @@ main() {
     local qdisc_result=0
     local io_result=0
 
+    # CPU Contention Tests
     test_runq_latency || runq_result=$?
     local actual_trace=$(get_latest_trace)
     python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups.txt"
