@@ -484,7 +484,9 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
         print("PureTime Noise-Free Makespan Analysis")
         print("=" * 60)
 
+        total_original = sum(r.original_makespan for r in results.values())
         total_noise_free = sum(r.noise_free_makespan for r in results.values())
+        print(f'Avg Original Makespan: {format_ns(total_original // len(results))}')
         print(f'Avg Noise-Free Makespan: {format_ns(total_noise_free // len(results))} ')
 
 
