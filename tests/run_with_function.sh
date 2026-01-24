@@ -146,16 +146,37 @@ stop_cpu_stress_containers() {
     CONTAINER_CGROUP_IDS=()
 }
 
+# Test file for network upload
+TESTFILE_PATH="/data/small.bin"
+SMALL_FILE_URL="https://github.com/STEllAR-GROUP/hpx/archive/refs/tags/1.4.0.zip"
+# LARGE_FILE_URL="https://download.pytorch.org/models/resnet50-19c8e357.pth"
+
+# Create test file for network upload
+create_testfile_by_downloading() {
+    if [ ! -f "$TESTFILE_PATH" ]; then
+        log_info "Downloading test file..."
+        curl -L -o "$TESTFILE_PATH" "$SMALL_FILE_URL"
+        log_pass "Test file created: $TESTFILE_PATH"
+    else
+        log_info "Test file already exists: $TESTFILE_PATH"
+    fi
+}
+
 # Start network containers and collect cgroup IDs
 start_network_containers() {
     local count=20
     log_info "Starting $count network-uploader containers..."
 
+    # Ensure test file exists
+    create_testfile_by_downloading
+
     CONTAINER_IDS=()
     CONTAINER_CGROUP_IDS=()
 
     for i in $(seq 1 $count); do
-        local cid=$(docker run -d --cpuset-cpus=0 "$NETWORK_UPLOADER_IMAGE")
+        local cid=$(docker run -d \
+            -v "$TESTFILE_PATH:$TESTFILE_PATH:ro" \
+            "$NETWORK_UPLOADER_IMAGE")
         CONTAINER_IDS+=("$cid")
 
         local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
