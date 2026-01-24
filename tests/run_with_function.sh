@@ -110,7 +110,7 @@ build_stress_image() {
 }
 
 # Start stress containers and collect cgroup IDs
-start_stress_containers() {
+start_cpu_stress_containers() {
     local count=20
     log_info "Starting $count graph-bfs containers..."
 
@@ -132,7 +132,7 @@ start_stress_containers() {
 }
 
 # Stop and remove stress containers
-stop_stress_containers() {
+stop_cpu_stress_containers() {
     log_info "Stopping and removing stress containers..."
     for cid in "${CONTAINER_IDS[@]}"; do
         docker rm -f "$cid" > /dev/null 2>&1 || true
@@ -163,7 +163,7 @@ test_runq_latency() {
 
     # Generate CPU contention with graph-bfs containers
     log_info "Generating CPU contention with graph-bfs containers..."
-    start_stress_containers
+    start_cpu_stress_containers
 
     # Save container cgroup IDs for later analysis
     for i in "${!CONTAINER_IDS[@]}"; do
@@ -175,7 +175,7 @@ test_runq_latency() {
     wait $puretime_pid 2>/dev/null || true
 
     # Stop and remove stress containers
-    stop_stress_containers
+    stop_cpu_stress_containers
 
     # Copy trace file
     if [ -f "$actual_trace" ]; then
