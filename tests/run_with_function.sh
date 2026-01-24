@@ -203,9 +203,9 @@ test_runq_latency() {
 
     # Save container cgroup IDs for later analysis
     for i in "${!CONTAINER_IDS[@]}"; do
-        echo "${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups.txt"
+        echo "${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups_cpu.txt"
     done
-    log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups.txt"
+    log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups_cpu.txt"
 
     # Wait for puretime to finish
     wait $puretime_pid 2>/dev/null || true
@@ -408,7 +408,7 @@ main() {
     # CPU Contention Test
     test_runq_latency || runq_result=$?
     local actual_trace=$(get_latest_trace)
-    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups.txt"
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_cpu.txt"
 
     # Network Contention Test
     test_qdisc_latency || qdisc_result=$?
