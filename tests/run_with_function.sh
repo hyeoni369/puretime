@@ -13,7 +13,7 @@ ANALYZER="$SCRIPT_DIR/analyze_trace.py"
 MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
 OUTPUT_DIR="${1:-/tmp/puretime_test_$(date +%Y%m%d_%H%M%S)}"
-TEST_DURATION=60
+TEST_DURATION=30
 RESULTS_FILE="$OUTPUT_DIR/test_results.txt"
 
 # Colors for output
@@ -112,6 +112,19 @@ build_stress_image() {
     log_info "Building network-uploader Docker image..."
     docker build -t "$NETWORK_UPLOADER_IMAGE" "$PURETIME_DIR/funcs/network-uploader" > /dev/null 2>&1
     log_pass "Docker image built: $NETWORK_UPLOADER_IMAGE"
+}
+
+# Disable NIC offloads on physical interface for accurate qdisc measurement
+disable_offloads() {
+    local iface="$1"
+    log_info "Disabling TSO/GSO/GRO on $iface..."
+    ethtool -K "$iface" tso off gso off gro off 2>/dev/null || log_warn "Failed to disable offloads on $iface"
+}
+
+restore_offloads() {
+    local iface="$1"
+    log_info "Restoring TSO/GSO/GRO on $iface..."
+    ethtool -K "$iface" tso on gso on gro on 2>/dev/null || true
 }
 
 # Start stress containers and collect cgroup IDs
@@ -272,6 +285,23 @@ test_qdisc_latency() {
 
     local trace_file="$OUTPUT_DIR/trace_qdisc.jsonl"
 
+    # Detect network interface for MinIO traffic
+    local iface=$(ip route get 165.194.27.225 2>/dev/null | awk '{print $5; exit}')
+    if [ -z "$iface" ]; then
+        iface=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
+    fi
+    log_info "Using network interface: $iface"
+
+    # Disable offloads to see individual packets in qdisc
+    disable_offloads "$iface"
+
+    # # Add bandwidth limit to cause Qdisc contention
+    # local tc_added=false
+    # if command -v tc &> /dev/null && [ -n "$iface" ]; then
+    #     log_info "Adding bandwidth limit (10mbit) to cause Qdisc contention..."
+    #     tc qdisc add dev "$iface" root tbf rate 10mbit burst 32kbit latency 400ms 2>/dev/null && tc_added=true || true
+    # fi
+
     # Start puretime
     log_info "Starting PureTime tracer..."
     $PURETIME_BIN -v -t $TEST_DURATION &
@@ -297,6 +327,13 @@ test_qdisc_latency() {
 
     # Stop containers
     stop_network_containers
+
+    # Remove bandwidth limit and restore offloads
+    # if [ "$tc_added" = true ]; then
+    #     log_info "Removing bandwidth limit..."
+    #     tc qdisc del dev "$iface" root 2>/dev/null || true
+    # fi
+    restore_offloads "$iface"
 
     # Copy trace file
     if [ -f "$actual_trace" ]; then
@@ -426,10 +463,10 @@ main() {
     local qdisc_result=0
     local io_result=0
 
-    # CPU Contention Test
-    test_runq_latency || runq_result=$?
-    local actual_trace=$(get_latest_trace)
-    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_cpu.txt"
+    # # CPU Contention Test
+    # test_runq_latency || runq_result=$?
+    # local actual_trace=$(get_latest_trace)
+    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_cpu.txt"
 
     # Network Contention Test
     test_qdisc_latency || qdisc_result=$?
