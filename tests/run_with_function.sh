@@ -99,14 +99,19 @@ get_latest_trace() {
 
 # Docker stress test variables
 GRAPH_BFS_IMAGE="graph-bfs"
+NETWORK_UPLOADER_IMAGE="network-uploader"
 CONTAINER_IDS=()
 CONTAINER_CGROUP_IDS=()  # numeric cgroup_id (inode)
 
-# Build graph-bfs Docker image
+# Build Docker images
 build_stress_image() {
     log_info "Building graph-bfs Docker image..."
     docker build -t "$GRAPH_BFS_IMAGE" "$PURETIME_DIR/funcs/graph-bfs" > /dev/null 2>&1
     log_pass "Docker image built: $GRAPH_BFS_IMAGE"
+
+    log_info "Building network-uploader Docker image..."
+    docker build -t "$NETWORK_UPLOADER_IMAGE" "$PURETIME_DIR/funcs/network-uploader" > /dev/null 2>&1
+    log_pass "Docker image built: $NETWORK_UPLOADER_IMAGE"
 }
 
 # Start stress containers and collect cgroup IDs
@@ -134,6 +139,37 @@ start_cpu_stress_containers() {
 # Stop and remove stress containers
 stop_cpu_stress_containers() {
     log_info "Stopping and removing stress containers..."
+    for cid in "${CONTAINER_IDS[@]}"; do
+        docker rm -f "$cid" > /dev/null 2>&1 || true
+    done
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+}
+
+# Start network containers and collect cgroup IDs
+start_network_containers() {
+    local count=20
+    log_info "Starting $count network-uploader containers..."
+
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+
+    for i in $(seq 1 $count); do
+        local cid=$(docker run -d --cpuset-cpus=0 "$NETWORK_UPLOADER_IMAGE")
+        CONTAINER_IDS+=("$cid")
+
+        local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
+        local cgroup_path=$(cat /proc/$pid/cgroup | grep -oP '0::/\K.*')
+        local cgroup_id=$(stat -c %i "/sys/fs/cgroup/${cgroup_path}")
+        CONTAINER_CGROUP_IDS+=("$cgroup_id")
+
+        log_info "  Container $i: ${cid:0:12} -> cgroup_id: $cgroup_id"
+    done
+}
+
+# Stop and remove network containers
+stop_network_containers() {
+    log_info "Stopping and removing network containers..."
     for cid in "${CONTAINER_IDS[@]}"; do
         docker rm -f "$cid" > /dev/null 2>&1 || true
     done
@@ -205,91 +241,71 @@ test_runq_latency() {
     fi
 }
 
-# # Test 2: Qdisc Latency
-# test_qdisc_latency() {
-#     echo ""
-#     log_info "=== Test 2: Qdisc Latency ==="
-#     echo "" >> "$RESULTS_FILE"
-#     echo "Test 2: Qdisc Latency" >> "$RESULTS_FILE"
-#     echo "---------------------" >> "$RESULTS_FILE"
+# Test 2: Qdisc Latency (Network)
+test_qdisc_latency() {
+    echo ""
+    log_info "=== Test 2: Qdisc Latency ==="
+    echo "" >> "$RESULTS_FILE"
+    echo "Test 2: Qdisc Latency" >> "$RESULTS_FILE"
+    echo "---------------------" >> "$RESULTS_FILE"
 
-#     local trace_file="$OUTPUT_DIR/trace_qdisc.jsonl"
+    local trace_file="$OUTPUT_DIR/trace_qdisc.jsonl"
 
-#     # Detect network interface
-#     local iface=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
-#     if [ -z "$iface" ]; then
-#         iface="lo"
-#     fi
-#     log_info "Using network interface: $iface"
+    # Start puretime
+    log_info "Starting PureTime tracer..."
+    $PURETIME_BIN -v -t $TEST_DURATION &
+    local puretime_pid=$!
+    sleep 2
 
-#     # Add network delay if tc is available and not loopback
-#     local netem_added=false
-#     if command -v tc &> /dev/null && [ "$iface" != "lo" ]; then
-#         log_info "Adding 50ms network delay via tc netem..."
-#         tc qdisc add dev $iface root netem delay 50ms 10ms 2>/dev/null && netem_added=true || true
-#     fi
+    local actual_trace=$(get_latest_trace)
+    log_info "Trace file: $actual_trace"
 
-#     # Start puretime
-#     log_info "Starting PureTime tracer..."
-#     $PURETIME_BIN -v -t $TEST_DURATION &
-#     local puretime_pid=$!
-#     sleep 2
+    # Generate network traffic with network-uploader containers
+    log_info "Generating network traffic with network-uploader containers..."
+    start_network_containers
 
-#     local actual_trace=$(get_latest_trace)
-#     log_info "Trace file: $actual_trace"
+    # Save container cgroup IDs
+    > "$OUTPUT_DIR/container_cgroups_network.txt"
+    for i in "${!CONTAINER_IDS[@]}"; do
+        echo "${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups_network.txt"
+    done
+    log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups_network.txt"
 
-#     # Generate network traffic
-#     log_info "Generating network traffic..."
+    # Wait for puretime to finish
+    wait $puretime_pid 2>/dev/null || true
 
-#     # Loopback traffic
-#     nc -l -p 12345 > /dev/null 2>&1 &
-#     local nc_pid=$!
-#     for i in $(seq 1 200); do
-#         echo "test packet $i" | nc -q 0 127.0.0.1 12345 2>/dev/null &
-#     done
+    # Stop containers
+    stop_network_containers
 
-#     # External traffic (ping)
-#     for i in $(seq 1 30); do
-#         ping -c 1 -W 1 8.8.8.8 > /dev/null 2>&1 &
-#     done
+    # Copy trace file
+    if [ -f "$actual_trace" ]; then
+        cp "$actual_trace" "$trace_file"
+    else
+        log_fail "No trace file generated"
+        echo "Result: FAIL - No trace file" >> "$RESULTS_FILE"
+        return 1
+    fi
 
-#     # Wait for puretime
-#     wait $puretime_pid 2>/dev/null || true
-#     kill $nc_pid 2>/dev/null || true
+    # Analyze network events
+    log_info "Analyzing qdisc latency..."
+    local queue_count=$(grep -c '"event":"net_dev_queue"' "$trace_file" 2>/dev/null || echo 0)
+    local start_xmit_count=$(grep -c '"event":"net_dev_start_xmit"' "$trace_file" 2>/dev/null || echo 0)
+    local xmit_count=$(grep -c '"event":"net_dev_xmit"' "$trace_file" 2>/dev/null || echo 0)
 
-#     # Remove netem qdisc
-#     if [ "$netem_added" = true ]; then
-#         log_info "Removing network delay..."
-#         tc qdisc del dev $iface root 2>/dev/null || true
-#     fi
+    echo "  net_dev_queue events: $queue_count" | tee -a "$RESULTS_FILE"
+    echo "  net_dev_start_xmit events: $start_xmit_count" | tee -a "$RESULTS_FILE"
+    echo "  net_dev_xmit events: $xmit_count" | tee -a "$RESULTS_FILE"
 
-#     # Copy trace file
-#     if [ -f "$actual_trace" ]; then
-#         cp "$actual_trace" "$trace_file"
-#     else
-#         log_fail "No trace file generated"
-#         echo "Result: FAIL - No trace file" >> "$RESULTS_FILE"
-#         return 1
-#     fi
-
-#     # Analyze results
-#     log_info "Analyzing qdisc latency..."
-#     local queue_count=$(grep -c '"event":"net_dev_queue"' "$trace_file" 2>/dev/null || echo 0)
-#     local xmit_count=$(grep -c '"event":"net_dev_xmit"' "$trace_file" 2>/dev/null || echo 0)
-
-#     echo "  net_dev_queue events: $queue_count" | tee -a "$RESULTS_FILE"
-#     echo "  net_dev_xmit events: $xmit_count" | tee -a "$RESULTS_FILE"
-
-#     if [ "$queue_count" -gt 10 ] && [ "$xmit_count" -gt 10 ]; then
-#         log_pass "Qdisc events captured successfully"
-#         echo "Result: PASS" >> "$RESULTS_FILE"
-#         return 0
-#     else
-#         log_warn "Limited qdisc events (may need more traffic)"
-#         echo "Result: WARNING - Limited events" >> "$RESULTS_FILE"
-#         return 1
-#     fi
-# }
+    if [ "$queue_count" -gt 100 ] && [ "$xmit_count" -gt 100 ]; then
+        log_pass "Qdisc events captured successfully"
+        echo "Result: PASS" >> "$RESULTS_FILE"
+        return 0
+    else
+        log_warn "Limited qdisc events (may need more traffic)"
+        echo "Result: WARNING - Limited events" >> "$RESULTS_FILE"
+        return 1
+    fi
+}
 
 # # Test 3: I/O Scheduler Latency
 # test_io_sched_latency() {
@@ -389,13 +405,15 @@ main() {
     local qdisc_result=0
     local io_result=0
 
-    # CPU Contention Tests
+    # CPU Contention Test
     test_runq_latency || runq_result=$?
     local actual_trace=$(get_latest_trace)
     python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups.txt"
 
-    # test_qdisc_latency || qdisc_result=$?
-    # test_io_sched_latency || io_result=$?
+    # Network Contention Test
+    test_qdisc_latency || qdisc_result=$?
+    actual_trace=$(get_latest_trace)
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_network.txt"
 
     print_summary
 
