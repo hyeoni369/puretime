@@ -17,6 +17,25 @@ sudo -i
 sudo echo mq-deadline > /sys/block/<device>/queue/scheduler
 ```
 
+#### Setup MinIO Server (for Network Benchmark)
+Network 벤치마크 테스트를 위해 별도 서버에서 MinIO를 실행해야 합니다.
+
+##### MinIO 서버 실행
+```sh
+docker run -d \
+  --name minio \
+  -p 9000:9000 \
+  -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  myminio:minio server /tmp/minio --console-address :9001
+```
+
+##### 버킷 생성 (웹 콘솔)
+- http://<서버IP>:9001 접속
+- minioadmin / minioadmin 로그인
+- Buckets → Create Bucket → uploads 생성
+
 ### **1. Clone your new repository**
 
 Clone your newly created repository to your local machine:
