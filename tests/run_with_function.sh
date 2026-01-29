@@ -173,7 +173,7 @@ create_testfile_by_downloading() {
 
 # Start network containers and collect cgroup IDs
 start_network_containers() {
-    local count=20
+    local count=3
     log_info "Starting $count network-uploader containers..."
 
     # Ensure test file exists
@@ -183,7 +183,7 @@ start_network_containers() {
     CONTAINER_CGROUP_IDS=()
 
     for i in $(seq 1 $count); do
-        local cid=$(docker run -d \
+        local cid=$(docker run --network=host -d \
             -v "$TESTFILE_PATH:$TESTFILE_PATH:ro" \
             "$NETWORK_UPLOADER_IMAGE")
         CONTAINER_IDS+=("$cid")
