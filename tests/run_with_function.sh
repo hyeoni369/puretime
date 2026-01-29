@@ -291,12 +291,23 @@ test_qdisc_latency() {
     # Disable offloads to see individual packets in qdisc
     disable_offloads "$iface"
 
-    # # Add bandwidth limit to cause Qdisc contention
-    # local tc_added=false
-    # if command -v tc &> /dev/null && [ -n "$iface" ]; then
-    #     log_info "Adding bandwidth limit (10mbit) to cause Qdisc contention..."
-    #     tc qdisc add dev "$iface" root tbf rate 10mbit burst 32kbit latency 400ms 2>/dev/null && tc_added=true || true
-    # fi
+    # Add bandwidth limit to cause Qdisc contention
+    local tc_added=false
+    if command -v tc &> /dev/null && [ -n "$iface" ]; then
+        log_info "Adding bandwidth limit (10mbit) to cause Qdisc contention..."
+
+        # 기존 qdisc 제거
+        sudo tc qdisc del dev "$iface" root 2>/dev/null
+
+        # htb를 root qdisc로 설정 (대역폭 제한용)
+        sudo tc qdisc add dev "$iface" root handle 1: htb default 10
+
+        # 10Mbps 클래스 생성
+        sudo tc class add dev "$iface" parent 1: classid 1:10 htb rate 10mbit burst 15k
+
+        # fq_codel을 leaf qdisc로 설정 (fair queueing용)
+        sudo tc qdisc add dev "$iface" parent 1:10 handle 10: fq_codel
+    fi
 
     # Start puretime
     log_info "Starting PureTime tracer..."
@@ -325,10 +336,10 @@ test_qdisc_latency() {
     stop_network_containers
 
     # Remove bandwidth limit and restore offloads
-    # if [ "$tc_added" = true ]; then
-    #     log_info "Removing bandwidth limit..."
-    #     tc qdisc del dev "$iface" root 2>/dev/null || true
-    # fi
+    if [ "$tc_added" = true ]; then
+        log_info "Removing bandwidth limit..."
+        tc qdisc del dev "$iface" root 2>/dev/null || true
+    fi
     restore_offloads "$iface"
 
     # Copy trace file
