@@ -36,7 +36,7 @@ def upload_to_minio(local_path: str, bucket: str, key: str,
 
 def main():
     # Configuration from environment
-    input_file = os.environ.get('INPUT_FILE', '/data/small.bin')
+    input_file = os.environ.get('INPUT_FILE', '/data/tmp.bin')
     minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://165.194.27.225:9000')
     minio_access_key = os.environ.get('MINIO_ACCESS_KEY', 'minioadmin')
     minio_secret_key = os.environ.get('MINIO_SECRET_KEY', 'minioadmin')
@@ -47,7 +47,7 @@ def main():
     if not os.path.exists(input_file):
         print(json.dumps({
             'error': f'Input file not found: {input_file}',
-            'hint': 'Mount a file to /data/small.bin or set INPUT_FILE env'
+            'hint': 'Mount a file to /data/tmp.bin or set INPUT_FILE env'
         }))
         return
 
