@@ -173,7 +173,7 @@ create_testfile_by_downloading() {
 
 # Start network containers and collect cgroup IDs
 start_network_containers() {
-    local count=3
+    local count=8
     log_info "Starting $count network-uploader containers..."
 
     # Ensure test file exists
