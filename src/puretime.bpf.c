@@ -16,6 +16,17 @@ struct {
     __uint(max_entries, 256 * 1024 * 1024);
 } events SEC(".maps");
 
+/* Hash map to track socket -> cgroup_id mapping
+ * Used to resolve container cgroup_id in softirq context where
+ * direct sk->sk_cgrp_data.cgroup lookup returns root cgroup
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 10240);
+    __type(key, __u64);      /* socket pointer */
+    __type(value, __u64);    /* cgroup_id */
+} tracked_sockets SEC(".maps");
+
 /* Softirq vector numbers to filter */
 #define NET_TX_SOFTIRQ   1
 #define NET_RX_SOFTIRQ   2
@@ -60,6 +71,25 @@ static __always_inline __u64 get_cgroup_id_from_socket(struct sock *sk)
         return 0;
 
     return BPF_CORE_READ(kn, id);
+}
+
+/* Helper: Check if task is in a container cgroup (level >= 2)
+ * Cgroup hierarchy: root (level=0) -> system.slice (level=1) -> containers (level>=2)
+ */
+static __always_inline bool is_container_cgroup(struct task_struct *task)
+{
+    struct css_set *cgroups;
+    struct cgroup *cgrp;
+
+    cgroups = BPF_CORE_READ(task, cgroups);
+    if (!cgroups)
+        return false;
+
+    cgrp = BPF_CORE_READ(cgroups, dfl_cgrp);
+    if (!cgrp)
+        return false;
+
+    return BPF_CORE_READ(cgrp, level) >= 2;
 }
 
 /* ============================================================
@@ -165,6 +195,50 @@ int BPF_PROG(handle_sched_switch, bool preempt,
 }
 
 /* ============================================================
+ * Socket Tracking for Container Network Attribution
+ * ============================================================ */
+
+/* Register socket -> cgroup_id mapping when container sends TCP data
+ * This runs in process context where cgroup information is valid
+ */
+SEC("fentry/tcp_sendmsg")
+int BPF_PROG(tcp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t size)
+{
+    struct task_struct *task;
+    __u64 cgroup_id;
+    __u64 sk_ptr;
+
+    /* Get current task */
+    task = (struct task_struct *)bpf_get_current_task();
+
+    /* Only track sockets from container processes */
+    if (!is_container_cgroup(task))
+        return 0;
+
+    /* Get cgroup ID while we have valid process context */
+    cgroup_id = get_task_cgroup_id(task);
+    if (cgroup_id <= 1)
+        return 0;  /* Skip root/system cgroups */
+
+    /* Register socket -> cgroup mapping */
+    sk_ptr = (__u64)sk;
+    bpf_map_update_elem(&tracked_sockets, &sk_ptr, &cgroup_id, BPF_ANY);
+
+    return 0;
+}
+
+/* Clean up socket mapping when TCP connection is closed
+ * Prevents stale entries and potential socket pointer reuse issues
+ */
+SEC("fentry/tcp_close")
+int BPF_PROG(tcp_close_entry, struct sock *sk, long timeout)
+{
+    __u64 sk_ptr = (__u64)sk;
+    bpf_map_delete_elem(&tracked_sockets, &sk_ptr);
+    return 0;
+}
+
+/* ============================================================
  * Network TX Tracepoints
  * ============================================================ */
 
@@ -174,7 +248,31 @@ int BPF_PROG(handle_net_dev_queue, struct sk_buff *skb)
     struct net_event *e;
     struct sock *sk;
     struct net_device *dev;
+    __u64 sk_ptr;
+    __u64 *cgroup_id_ptr;
+    __u64 cgroup_id;
 
+    /* Get socket from skb */
+    sk = BPF_CORE_READ(skb, sk);
+    if (!sk)
+        return 0;  /* No socket, cannot attribute */
+
+    /* Try map lookup first (works in softirq context) */
+    sk_ptr = (__u64)sk;
+    cgroup_id_ptr = bpf_map_lookup_elem(&tracked_sockets, &sk_ptr);
+
+    if (cgroup_id_ptr) {
+        cgroup_id = *cgroup_id_ptr;
+    } else {
+        /* Fallback to direct socket cgroup read (may return root in softirq) */
+        cgroup_id = get_cgroup_id_from_socket(sk);
+    }
+
+    /* Filter non-container events (root cgroup = 1) */
+    if (cgroup_id <= 1)
+        return 0;
+
+    /* Reserve ring buffer entry */
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
         return 0;
@@ -182,10 +280,7 @@ int BPF_PROG(handle_net_dev_queue, struct sk_buff *skb)
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cpu = bpf_get_smp_processor_id();
     e->hdr.event_type = EVENT_NET_DEV_QUEUE;
-
-    /* Get cgroup_id from socket if available */
-    sk = BPF_CORE_READ(skb, sk);
-    e->hdr.cgroup_id = get_cgroup_id_from_socket(sk);
+    e->hdr.cgroup_id = cgroup_id;
 
     e->skb_addr = (__u64)skb;
     e->len = BPF_CORE_READ(skb, len);
@@ -203,6 +298,28 @@ int BPF_PROG(handle_net_dev_start_xmit, const struct sk_buff *skb,
 {
     struct net_event *e;
     struct sock *sk;
+    __u64 sk_ptr;
+    __u64 *cgroup_id_ptr;
+    __u64 cgroup_id;
+
+    /* Get socket from skb */
+    sk = BPF_CORE_READ(skb, sk);
+    if (!sk)
+        return 0;
+
+    /* Try map lookup first (works in softirq context) */
+    sk_ptr = (__u64)sk;
+    cgroup_id_ptr = bpf_map_lookup_elem(&tracked_sockets, &sk_ptr);
+
+    if (cgroup_id_ptr) {
+        cgroup_id = *cgroup_id_ptr;
+    } else {
+        cgroup_id = get_cgroup_id_from_socket(sk);
+    }
+
+    /* Filter non-container events */
+    if (cgroup_id <= 1)
+        return 0;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
@@ -211,9 +328,7 @@ int BPF_PROG(handle_net_dev_start_xmit, const struct sk_buff *skb,
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cpu = bpf_get_smp_processor_id();
     e->hdr.event_type = EVENT_NET_DEV_START_XMIT;
-
-    sk = BPF_CORE_READ(skb, sk);
-    e->hdr.cgroup_id = get_cgroup_id_from_socket(sk);
+    e->hdr.cgroup_id = cgroup_id;
 
     e->skb_addr = (__u64)skb;
     e->len = BPF_CORE_READ(skb, len);
@@ -229,6 +344,28 @@ int BPF_PROG(handle_net_dev_xmit, struct sk_buff *skb, int rc,
 {
     struct net_event *e;
     struct sock *sk;
+    __u64 sk_ptr;
+    __u64 *cgroup_id_ptr;
+    __u64 cgroup_id;
+
+    /* Get socket from skb */
+    sk = BPF_CORE_READ(skb, sk);
+    if (!sk)
+        return 0;
+
+    /* Try map lookup first (works in softirq context) */
+    sk_ptr = (__u64)sk;
+    cgroup_id_ptr = bpf_map_lookup_elem(&tracked_sockets, &sk_ptr);
+
+    if (cgroup_id_ptr) {
+        cgroup_id = *cgroup_id_ptr;
+    } else {
+        cgroup_id = get_cgroup_id_from_socket(sk);
+    }
+
+    /* Filter non-container events */
+    if (cgroup_id <= 1)
+        return 0;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
@@ -237,9 +374,7 @@ int BPF_PROG(handle_net_dev_xmit, struct sk_buff *skb, int rc,
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cpu = bpf_get_smp_processor_id();
     e->hdr.event_type = EVENT_NET_DEV_XMIT;
-
-    sk = BPF_CORE_READ(skb, sk);
-    e->hdr.cgroup_id = get_cgroup_id_from_socket(sk);
+    e->hdr.cgroup_id = cgroup_id;
 
     e->skb_addr = (__u64)skb;
     e->len = len;
