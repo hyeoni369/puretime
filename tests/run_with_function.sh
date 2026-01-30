@@ -101,6 +101,8 @@ get_latest_trace() {
 GRAPH_BFS_IMAGE="graph-bfs"
 NETWORK_UPLOADER_IMAGE="network-uploader"
 COMPRESSION_IMAGE="compression"
+THUMBNAILER_IMAGE="thumbnailer"
+VIDEO_PROCESSING_IMAGE="video-processing"
 CONTAINER_IDS=()
 CONTAINER_CGROUP_IDS=()  # numeric cgroup_id (inode)
 
@@ -117,6 +119,14 @@ build_stress_image() {
     log_info "Building compression Docker image..."
     docker build -t "$COMPRESSION_IMAGE" "$PURETIME_DIR/funcs/compression" > /dev/null 2>&1
     log_pass "Docker image built: $COMPRESSION_IMAGE"
+
+    log_info "Building thumbnailer Docker image..."
+    docker build -t "$THUMBNAILER_IMAGE" "$PURETIME_DIR/funcs/thumbnailer" > /dev/null 2>&1
+    log_pass "Docker image built: $THUMBNAILER_IMAGE"
+
+    log_info "Building video-processing Docker image..."
+    docker build -t "$VIDEO_PROCESSING_IMAGE" "$PURETIME_DIR/funcs/video-processing" > /dev/null 2>&1
+    log_pass "Docker image built: $VIDEO_PROCESSING_IMAGE"
 }
 
 # Disable NIC offloads on physical interface for accurate qdisc measurement
@@ -302,6 +312,42 @@ start_block_io_containers() {
 # Stop and remove block I/O containers
 stop_block_io_containers() {
     log_info "Stopping and removing compression containers..."
+    for cid in "${CONTAINER_IDS[@]}"; do
+        docker rm -f "$cid" > /dev/null 2>&1 || true
+    done
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+}
+
+# Start mixed workload containers (thumbnailer + video-processing)
+start_mixed_workload_containers() {
+    local count=6
+    log_info "Starting $count mixed workload containers..."
+
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+
+    for i in $(seq 1 $count); do
+        # Alternate between thumbnailer and video-processing
+        if [ $((i % 2)) -eq 1 ]; then
+            local cid=$(docker run -d "$THUMBNAILER_IMAGE")
+        else
+            local cid=$(docker run -d "$VIDEO_PROCESSING_IMAGE")
+        fi
+        CONTAINER_IDS+=("$cid")
+
+        local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
+        local cgroup_path=$(cat /proc/$pid/cgroup | grep -oP '0::/\K.*')
+        local cgroup_id=$(stat -c %i "/sys/fs/cgroup/${cgroup_path}")
+        CONTAINER_CGROUP_IDS+=("$cgroup_id")
+
+        log_info "  Container $i: ${cid:0:12} -> cgroup_id: $cgroup_id"
+    done
+}
+
+# Stop and remove mixed workload containers
+stop_mixed_workload_containers() {
+    log_info "Stopping and removing mixed workload containers..."
     for cid in "${CONTAINER_IDS[@]}"; do
         docker rm -f "$cid" > /dev/null 2>&1 || true
     done
@@ -544,6 +590,78 @@ test_block_io_latency() {
     fi
 }
 
+# Test 4: Mixed Workload (CPU + Network + Block I/O)
+test_mixed_workload() {
+    echo ""
+    log_info "=== Test 4: Mixed Workload (CPU + Network + Block I/O) ==="
+    echo "" >> "$RESULTS_FILE"
+    echo "Test 4: Mixed Workload" >> "$RESULTS_FILE"
+    echo "----------------------" >> "$RESULTS_FILE"
+
+    local trace_file="$OUTPUT_DIR/trace_mixed.jsonl"
+
+    # Detect network interface
+    local iface=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
+    log_info "Using network interface: $iface"
+
+    # Setup: I/O scheduler + Network offloads
+    setup_io_scheduler
+    disable_offloads "$iface"
+
+    # Start puretime
+    log_info "Starting PureTime tracer..."
+    $PURETIME_BIN -v -t $TEST_DURATION &
+    local puretime_pid=$!
+    sleep 2
+
+    local actual_trace=$(get_latest_trace)
+    log_info "Trace file: $actual_trace"
+
+    # Generate mixed workload
+    log_info "Generating mixed workload with thumbnailer + video-processing..."
+    start_mixed_workload_containers
+
+    # Save container cgroup IDs
+    > "$OUTPUT_DIR/container_cgroups_mixed.txt"
+    for i in "${!CONTAINER_IDS[@]}"; do
+        echo "${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups_mixed.txt"
+    done
+    log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups_mixed.txt"
+
+    # Wait for puretime to finish
+    wait $puretime_pid 2>/dev/null || true
+
+    # Stop containers
+    stop_mixed_workload_containers
+
+    # Teardown
+    restore_io_scheduler
+    restore_offloads "$iface"
+
+    # Copy trace file
+    if [ -f "$actual_trace" ]; then
+        cp "$actual_trace" "$trace_file"
+    else
+        log_fail "No trace file generated"
+        echo "Result: FAIL - No trace file" >> "$RESULTS_FILE"
+        return 1
+    fi
+
+    # Analyze results
+    log_info "Analyzing mixed workload..."
+    local runq_count=$(grep -c '"event":"sched_wakeup"' "$trace_file" 2>/dev/null || echo 0)
+    local qdisc_count=$(grep -c '"event":"net_dev_queue"' "$trace_file" 2>/dev/null || echo 0)
+    local bio_count=$(grep -c '"event":"block_rq_issue"' "$trace_file" 2>/dev/null || echo 0)
+
+    echo "  CPU events (sched_wakeup): $runq_count" | tee -a "$RESULTS_FILE"
+    echo "  Network events (net_dev_queue): $qdisc_count" | tee -a "$RESULTS_FILE"
+    echo "  Block I/O events (block_rq_issue): $bio_count" | tee -a "$RESULTS_FILE"
+
+    log_pass "Mixed workload test completed"
+    echo "Result: PASS" >> "$RESULTS_FILE"
+    return 0
+}
+
 # Print summary
 print_summary() {
     echo ""
@@ -565,6 +683,7 @@ main() {
     local runq_result=0
     local qdisc_result=0
     local io_result=0
+    local mixed_result=0
 
     # # CPU Contention Test
     # test_runq_latency || runq_result=$?
@@ -576,15 +695,20 @@ main() {
     # actual_trace=$(get_latest_trace)
     # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_network.txt"
 
-    # Block I/O Contention Test
-    test_block_io_latency || io_result=$?
+    # # Block I/O Contention Test
+    # test_block_io_latency || io_result=$?
+    # actual_trace=$(get_latest_trace)
+    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_block.txt"
+
+    # Mixed Workload Test (CPU + Network + Block I/O)
+    test_mixed_workload || mixed_result=$?
     actual_trace=$(get_latest_trace)
-    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_block.txt"
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_mixed.txt"
 
     print_summary
 
     # Exit with error if all tests failed
-    if [ $runq_result -ne 0 ] && [ $qdisc_result -ne 0 ] && [ $io_result -ne 0 ]; then
+    if [ $runq_result -ne 0 ] && [ $qdisc_result -ne 0 ] && [ $io_result -ne 0 ] && [ $mixed_result -ne 0 ]; then
         exit 1
     fi
 }
