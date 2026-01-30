@@ -685,25 +685,25 @@ main() {
     local io_result=0
     local mixed_result=0
 
-    # # CPU Contention Test
-    # test_runq_latency || runq_result=$?
-    # local actual_trace=$(get_latest_trace)
-    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_cpu.txt"
+    # CPU Contention Test
+    test_runq_latency || runq_result=$?
+    local actual_trace=$(get_latest_trace)
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_cpu.txt"
 
-    # # Network Contention Test
-    # test_qdisc_latency || qdisc_result=$?
-    # actual_trace=$(get_latest_trace)
-    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_network.txt"
-
-    # # Block I/O Contention Test
-    # test_block_io_latency || io_result=$?
-    # actual_trace=$(get_latest_trace)
-    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_block.txt"
-
-    # Mixed Workload Test (CPU + Network + Block I/O)
-    test_mixed_workload || mixed_result=$?
+    # Network Contention Test
+    test_qdisc_latency || qdisc_result=$?
     actual_trace=$(get_latest_trace)
-    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_mixed.txt"
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_network.txt"
+
+    # Block I/O Contention Test
+    test_block_io_latency || io_result=$?
+    actual_trace=$(get_latest_trace)
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_block.txt"
+
+    # # Mixed Workload Test (CPU + Network + Block I/O)
+    # test_mixed_workload || mixed_result=$?
+    # actual_trace=$(get_latest_trace)
+    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_mixed.txt"
 
     print_summary
 
