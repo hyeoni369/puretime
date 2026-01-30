@@ -394,13 +394,18 @@ int BPF_PROG(handle_block_rq_insert, struct request *rq)
     struct block_event *e;
     struct block_device *bdev;
     blk_opf_t cmd_flags;
+    __u64 cgroup_id;
+
+    cgroup_id = bpf_get_current_cgroup_id();
+    if (cgroup_id <= 1)
+        return 0;  /* Ignore idle and root cgroups */
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
         return 0;
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
-    e->hdr.cgroup_id = bpf_get_current_cgroup_id();
+    e->hdr.cgroup_id = cgroup_id;
     e->hdr.cpu = bpf_get_smp_processor_id();
     e->hdr.event_type = EVENT_BLOCK_RQ_INSERT;
 
@@ -429,13 +434,18 @@ int BPF_PROG(handle_block_rq_issue, struct request *rq)
     struct block_event *e;
     struct block_device *bdev;
     blk_opf_t cmd_flags;
+    __u64 cgroup_id;
+
+    cgroup_id = bpf_get_current_cgroup_id();
+    if (cgroup_id <= 1)
+        return 0;  /* Ignore idle and root cgroups */
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
         return 0;
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
-    e->hdr.cgroup_id = bpf_get_current_cgroup_id();
+    e->hdr.cgroup_id = cgroup_id;
     e->hdr.cpu = bpf_get_smp_processor_id();
     e->hdr.event_type = EVENT_BLOCK_RQ_ISSUE;
 
