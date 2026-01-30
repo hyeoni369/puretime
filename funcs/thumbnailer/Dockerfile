@@ -15,8 +15,8 @@ COPY function.py .
 RUN mkdir -p /tmp/thumbnailer_test
 
 ENV ITERATIONS=1
-ENV THUMB_WIDTH=200
-ENV THUMB_HEIGHT=200
+ENV THUMB_WIDTH=1000
+ENV THUMB_HEIGHT=1000
 ENV WORK_DIR=/tmp/thumbnailer_test
 
 CMD ["python3", "function.py"]

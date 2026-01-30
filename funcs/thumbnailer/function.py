@@ -41,7 +41,7 @@ def main():
     work_dir = os.environ.get('WORK_DIR', '/tmp/thumbnailer_test')
 
     # Use Lorem Picsum for random images (different sizes for variety)
-    image_sizes = [800, 1024, 1280, 1600, 1920]
+    image_sizes = [1920, 1600, 1280, 1024, 800]
 
     results = []
     total_start = time.perf_counter()

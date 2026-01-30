@@ -14,6 +14,6 @@ RUN mkdir -p /tmp/video_test
 ENV ITERATIONS=1
 ENV OPERATION=gif
 ENV WORK_DIR=/tmp/video_test
-ENV VIDEO_URL=https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4
+ENV VIDEO_URL=https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_20MB.mp4
 
 CMD ["python3", "function.py"]
