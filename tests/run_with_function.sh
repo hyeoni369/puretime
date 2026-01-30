@@ -287,7 +287,7 @@ start_block_io_containers() {
     CONTAINER_CGROUP_IDS=()
 
     for i in $(seq 1 $count); do
-        local cid=$(docker run -d "$COMPRESSION_IMAGE")
+        local cid=$(docker run -d -v /mnt/hdd/tmp:/tmp "$COMPRESSION_IMAGE")
         CONTAINER_IDS+=("$cid")
 
         local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
