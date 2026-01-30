@@ -100,6 +100,7 @@ get_latest_trace() {
 # Docker stress test variables
 GRAPH_BFS_IMAGE="graph-bfs"
 NETWORK_UPLOADER_IMAGE="network-uploader"
+COMPRESSION_IMAGE="compression"
 CONTAINER_IDS=()
 CONTAINER_CGROUP_IDS=()  # numeric cgroup_id (inode)
 
@@ -112,6 +113,10 @@ build_stress_image() {
     log_info "Building network-uploader Docker image..."
     docker build -t "$NETWORK_UPLOADER_IMAGE" "$PURETIME_DIR/funcs/network-uploader" > /dev/null 2>&1
     log_pass "Docker image built: $NETWORK_UPLOADER_IMAGE"
+
+    log_info "Building compression Docker image..."
+    docker build -t "$COMPRESSION_IMAGE" "$PURETIME_DIR/funcs/compression" > /dev/null 2>&1
+    log_pass "Docker image built: $COMPRESSION_IMAGE"
 }
 
 # Disable NIC offloads on physical interface for accurate qdisc measurement
@@ -200,6 +205,37 @@ start_network_containers() {
 # Stop and remove network containers
 stop_network_containers() {
     log_info "Stopping and removing network containers..."
+    for cid in "${CONTAINER_IDS[@]}"; do
+        docker rm -f "$cid" > /dev/null 2>&1 || true
+    done
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+}
+
+# Start block I/O containers and collect cgroup IDs
+start_block_io_containers() {
+    local count=8
+    log_info "Starting $count compression containers..."
+
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+
+    for i in $(seq 1 $count); do
+        local cid=$(docker run -d "$COMPRESSION_IMAGE")
+        CONTAINER_IDS+=("$cid")
+
+        local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
+        local cgroup_path=$(cat /proc/$pid/cgroup | grep -oP '0::/\K.*')
+        local cgroup_id=$(stat -c %i "/sys/fs/cgroup/${cgroup_path}")
+        CONTAINER_CGROUP_IDS+=("$cgroup_id")
+
+        log_info "  Container $i: ${cid:0:12} -> cgroup_id: $cgroup_id"
+    done
+}
+
+# Stop and remove block I/O containers
+stop_block_io_containers() {
+    log_info "Stopping and removing compression containers..."
     for cid in "${CONTAINER_IDS[@]}"; do
         docker rm -f "$cid" > /dev/null 2>&1 || true
     done
@@ -372,81 +408,69 @@ test_qdisc_latency() {
     fi
 }
 
-# # Test 3: I/O Scheduler Latency
-# test_io_sched_latency() {
-#     echo ""
-#     log_info "=== Test 3: I/O Scheduler Latency ==="
-#     echo "" >> "$RESULTS_FILE"
-#     echo "Test 3: I/O Scheduler Latency" >> "$RESULTS_FILE"
-#     echo "------------------------------" >> "$RESULTS_FILE"
+# Test 3: Block I/O Latency (with containers)
+test_block_io_latency() {
+    echo ""
+    log_info "=== Test 3: Block I/O Latency ==="
+    echo "" >> "$RESULTS_FILE"
+    echo "Test 3: Block I/O Latency" >> "$RESULTS_FILE"
+    echo "--------------------------" >> "$RESULTS_FILE"
 
-#     local trace_file="$OUTPUT_DIR/trace_block.jsonl"
-#     local test_dir="/tmp/puretime_io_test"
+    local trace_file="$OUTPUT_DIR/trace_block.jsonl"
 
-#     mkdir -p "$test_dir"
+    # Start puretime
+    log_info "Starting PureTime tracer..."
+    $PURETIME_BIN -v -t $TEST_DURATION &
+    local puretime_pid=$!
+    sleep 2
 
-#     # Start puretime
-#     log_info "Starting PureTime tracer..."
-#     $PURETIME_BIN -v -t $TEST_DURATION &
-#     local puretime_pid=$!
-#     sleep 2
+    local actual_trace=$(get_latest_trace)
+    log_info "Trace file: $actual_trace"
 
-#     local actual_trace=$(get_latest_trace)
-#     log_info "Trace file: $actual_trace"
+    # Generate I/O contention with compression containers
+    log_info "Generating I/O contention with compression containers..."
+    start_block_io_containers
 
-#     # Generate I/O workload
-#     log_info "Generating I/O workload..."
+    # Save container cgroup IDs
+    > "$OUTPUT_DIR/container_cgroups_block.txt"
+    for i in "${!CONTAINER_IDS[@]}"; do
+        echo "${CONTAINER_CGROUP_IDS[$i]}" >> "$OUTPUT_DIR/container_cgroups_block.txt"
+    done
+    log_info "Container cgroup_ids saved to $OUTPUT_DIR/container_cgroups_block.txt"
 
-#     if command -v fio &> /dev/null; then
-#         fio --name=test --directory=$test_dir --rw=randrw --bs=4k \
-#             --size=50M --numjobs=4 --runtime=$((TEST_DURATION - 5))s \
-#             --time_based --ioengine=sync --direct=1 &
-#         local fio_pid=$!
-#     else
-#         log_warn "fio not available, using dd"
-#         for i in $(seq 1 5); do
-#             dd if=/dev/zero of=$test_dir/test_$i.bin bs=1M count=20 \
-#                conv=fdatasync 2>/dev/null &
-#         done
-#     fi
+    # Wait for puretime to finish
+    wait $puretime_pid 2>/dev/null || true
 
-#     # Wait for puretime
-#     wait $puretime_pid 2>/dev/null || true
-#     wait $fio_pid 2>/dev/null || true
+    # Stop containers
+    stop_block_io_containers
 
-#     # Cleanup test files
-#     rm -rf "$test_dir"
+    # Copy trace file
+    if [ -f "$actual_trace" ]; then
+        cp "$actual_trace" "$trace_file"
+    else
+        log_fail "No trace file generated"
+        echo "Result: FAIL - No trace file" >> "$RESULTS_FILE"
+        return 1
+    fi
 
-#     # Copy trace file
-#     if [ -f "$actual_trace" ]; then
-#         cp "$actual_trace" "$trace_file"
-#     else
-#         log_fail "No trace file generated"
-#         echo "Result: FAIL - No trace file" >> "$RESULTS_FILE"
-#         return 1
-#     fi
+    # Analyze results
+    log_info "Analyzing block I/O latency..."
+    local insert_count=$(grep -c '"event":"block_rq_insert"' "$trace_file" 2>/dev/null || echo 0)
+    local issue_count=$(grep -c '"event":"block_rq_issue"' "$trace_file" 2>/dev/null || echo 0)
 
-#     # Analyze results
-#     log_info "Analyzing I/O scheduler latency..."
-#     local insert_count=$(grep -c '"event":"block_rq_insert"' "$trace_file" 2>/dev/null || echo 0)
-#     local issue_count=$(grep -c '"event":"block_rq_issue"' "$trace_file" 2>/dev/null || echo 0)
-#     local complete_count=$(grep -c '"event":"block_rq_complete"' "$trace_file" 2>/dev/null || echo 0)
+    echo "  block_rq_insert events: $insert_count" | tee -a "$RESULTS_FILE"
+    echo "  block_rq_issue events: $issue_count" | tee -a "$RESULTS_FILE"
 
-#     echo "  block_rq_insert events: $insert_count" | tee -a "$RESULTS_FILE"
-#     echo "  block_rq_issue events: $issue_count" | tee -a "$RESULTS_FILE"
-#     echo "  block_rq_complete events: $complete_count" | tee -a "$RESULTS_FILE"
-
-#     if [ "$issue_count" -gt 10 ]; then
-#         log_pass "Block I/O events captured successfully"
-#         echo "Result: PASS" >> "$RESULTS_FILE"
-#         return 0
-#     else
-#         log_warn "Limited block events (NVMe may bypass scheduler)"
-#         echo "Result: WARNING - Limited events (NVMe bypass possible)" >> "$RESULTS_FILE"
-#         return 1
-#     fi
-# }
-
+    if [ "$issue_count" -gt 10 ]; then
+        log_pass "Block I/O events captured successfully"
+        echo "Result: PASS" >> "$RESULTS_FILE"
+        return 0
+    else
+        log_warn "Limited block events (NVMe may bypass scheduler)"
+        echo "Result: WARNING - Limited events (NVMe bypass possible)" >> "$RESULTS_FILE"
+        return 1
+    fi
+}
 
 # Print summary
 print_summary() {
@@ -475,10 +499,15 @@ main() {
     # local actual_trace=$(get_latest_trace)
     # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_cpu.txt"
 
-    # Network Contention Test
-    test_qdisc_latency || qdisc_result=$?
+    # # Network Contention Test
+    # test_qdisc_latency || qdisc_result=$?
+    # actual_trace=$(get_latest_trace)
+    # python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_network.txt"
+
+    # Block I/O Contention Test
+    test_block_io_latency || io_result=$?
     actual_trace=$(get_latest_trace)
-    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_network.txt"
+    python3 "$MAKESPAN" "$actual_trace" -c "$OUTPUT_DIR/container_cgroups_block.txt"
 
     print_summary
 
