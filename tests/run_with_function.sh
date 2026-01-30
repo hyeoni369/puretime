@@ -280,7 +280,7 @@ stop_network_containers() {
 
 # Start block I/O containers and collect cgroup IDs
 start_block_io_containers() {
-    local count=8
+    local count=10
     log_info "Starting $count compression containers..."
 
     CONTAINER_IDS=()

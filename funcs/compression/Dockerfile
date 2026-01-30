@@ -6,8 +6,8 @@ COPY function.py .
 # Create work directory with proper permissions
 RUN mkdir -p /tmp/compression_test
 
-ENV NUM_FILES=5
-ENV FILE_SIZE_MB=10
+ENV NUM_FILES=1
+ENV FILE_SIZE_MB=100
 ENV ITERATIONS=1
 ENV WORK_DIR=/tmp/compression_test
 
