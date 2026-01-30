@@ -132,6 +132,72 @@ restore_offloads() {
     ethtool -K "$iface" tso on gso on gro on 2>/dev/null || true
 }
 
+# Variables for I/O scheduler
+BLOCK_DEVICE=""
+ORIGINAL_SCHEDULER=""
+
+# Get block device used by Docker (root filesystem device)
+get_docker_block_device() {
+    # Docker containers typically use the root filesystem
+    # Find the device for /var/lib/docker (or /)
+    local docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+    local mount_point=$(df "$docker_root" 2>/dev/null | tail -1 | awk '{print $1}')
+
+    # Extract base device (e.g., /dev/sda1 -> sda, /dev/nvme0n1p1 -> nvme0n1)
+    local base_dev=$(basename "$mount_point" | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
+
+    if [ -b "/dev/$base_dev" ]; then
+        echo "$base_dev"
+    else
+        # Fallback: find first non-loop block device
+        lsblk -d -n -o NAME,TYPE | grep disk | head -1 | awk '{print $1}'
+    fi
+}
+
+# Set I/O scheduler to BFQ for fair queueing (enables contention visibility)
+setup_io_scheduler() {
+    BLOCK_DEVICE=$(get_docker_block_device)
+    if [ -z "$BLOCK_DEVICE" ]; then
+        log_warn "Could not detect block device"
+        return 1
+    fi
+
+    local sched_path="/sys/block/$BLOCK_DEVICE/queue/scheduler"
+    if [ ! -f "$sched_path" ]; then
+        log_warn "Scheduler path not found: $sched_path"
+        return 1
+    fi
+
+    # Save original scheduler (marked with [brackets])
+    ORIGINAL_SCHEDULER=$(cat "$sched_path" | grep -oP '\[\K[^\]]+')
+    log_info "Block device: $BLOCK_DEVICE, current scheduler: $ORIGINAL_SCHEDULER"
+
+    # Change to BFQ if not already
+    if [ "$ORIGINAL_SCHEDULER" != "bfq" ]; then
+        log_info "Setting I/O scheduler to BFQ..."
+        echo bfq > "$sched_path" 2>/dev/null || {
+            log_warn "Failed to set BFQ scheduler (may need to load bfq module)"
+            return 1
+        }
+        log_pass "I/O scheduler changed to BFQ"
+    else
+        log_info "I/O scheduler already BFQ"
+    fi
+}
+
+# Restore original I/O scheduler
+restore_io_scheduler() {
+    if [ -z "$BLOCK_DEVICE" ] || [ -z "$ORIGINAL_SCHEDULER" ]; then
+        return 0
+    fi
+
+    local sched_path="/sys/block/$BLOCK_DEVICE/queue/scheduler"
+    if [ "$ORIGINAL_SCHEDULER" != "bfq" ]; then
+        log_info "Restoring I/O scheduler to $ORIGINAL_SCHEDULER..."
+        echo "$ORIGINAL_SCHEDULER" > "$sched_path" 2>/dev/null || true
+    fi
+}
+
 # Start stress containers and collect cgroup IDs
 start_cpu_stress_containers() {
     local count=20
@@ -418,6 +484,9 @@ test_block_io_latency() {
 
     local trace_file="$OUTPUT_DIR/trace_block.jsonl"
 
+    # Setup: Change I/O scheduler to BFQ for fair queueing
+    setup_io_scheduler
+
     # Start puretime
     log_info "Starting PureTime tracer..."
     $PURETIME_BIN -v -t $TEST_DURATION &
@@ -443,6 +512,9 @@ test_block_io_latency() {
 
     # Stop containers
     stop_block_io_containers
+
+    # Teardown: Restore original I/O scheduler
+    restore_io_scheduler
 
     # Copy trace file
     if [ -f "$actual_trace" ]; then
