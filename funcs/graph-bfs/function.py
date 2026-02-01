@@ -35,8 +35,8 @@ def bfs(graph, start):
     return dist
 
 def main():
-    size = int(sys.argv[1]) if len(sys.argv) > 1 else 10000
-    iters = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    size = int(sys.argv[1]) if len(sys.argv) > 1 else 1000000
+    iters = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     
     start = time.perf_counter()
     graph = generate_graph(size)

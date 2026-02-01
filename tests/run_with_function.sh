@@ -13,7 +13,7 @@ ANALYZER="$SCRIPT_DIR/analyze_trace.py"
 MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
 OUTPUT_DIR="${1:-/tmp/puretime_test_$(date +%Y%m%d_%H%M%S)}"
-TEST_DURATION=30
+TEST_DURATION=60
 RESULTS_FILE="$OUTPUT_DIR/test_results.txt"
 
 # Colors for output
@@ -210,7 +210,7 @@ restore_io_scheduler() {
 
 # Start stress containers and collect cgroup IDs
 start_cpu_stress_containers() {
-    local count=20
+    local count=10
     log_info "Starting $count graph-bfs containers..."
 
     CONTAINER_IDS=()
