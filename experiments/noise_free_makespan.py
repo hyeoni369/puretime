@@ -492,7 +492,9 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
             'wait_net': result.wait_net,
             'wait_bio': result.wait_bio,
         } for cgroup_id, result in sorted(results.items())]
-        
+
+        print(json.dumps(result, indent=2))
+
             # wait_pct = (result.total_unique_wait / result.original_makespan * 100) \
             #     if result.original_makespan > 0 else 0
 
