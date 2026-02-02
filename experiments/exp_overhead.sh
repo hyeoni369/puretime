@@ -1,15 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# PureTime Experiment: System Overhead Measurement
+# PureTime Experiment: Noise Removal Accuracy by Contention Type
 # =============================================================================
 # 
-# 목적: PureTime eBPF 프로그램이 시스템에 미치는 오버헤드 측정
+# 목적: CPU, Network, Block I/O 각 노이즈 유형별로 PureTime의 노이즈 제거 정확도 측정
+#       (노이즈 강도는 고정, 유형별 차이만 비교)
 #
-# 측정 항목:
-#   1. 실행 시간 지연: PureTime on/off 상태에서 동일 워크로드 실행 시간 비교
-#   2. 자원 소비량: CPU 사용률, 메모리 사용량
+# 정확도 계산 방식:
+#   Ground Truth Noise = T_contention - T_isolated
+#   Removed Noise      = T_contention - T_puretime
+#   Efficiency         = (Removed Noise / Ground Truth Noise) × 100%
 #
-# Usage: sudo ./exp_overhead.sh [output_dir]
+# Usage: sudo ./exp_accuracy_by_type.sh [output_dir]
 # =============================================================================
 
 set -e
@@ -18,17 +20,16 @@ set -e
 # Configuration Variables (수정 가능)
 # =============================================================================
 
-# 측정 반복 횟수
-ITERATIONS=20
+# 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
+CPU_CONTAINER_COUNTS=(1 2 4)
+NET_CONTAINER_COUNTS=(1 2 4)
+BIO_CONTAINER_COUNTS=(1 10)
 
-# 테스트 워크로드 목록
-WORKLOADS=("graph-bfs" "network-uploader" "compression")
+# 반복 실험 횟수
+ITERATIONS=1
 
-# PureTime 트레이싱 시간
-TRACE_DURATION=60
-
-# 자원 모니터링 간격 (초)
-MONITOR_INTERVAL=1
+# PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
+TRACE_DURATION=120
 
 # =============================================================================
 # Path Configuration
@@ -37,13 +38,20 @@ MONITOR_INTERVAL=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PURETIME_DIR="$(dirname "$SCRIPT_DIR")"
 PURETIME_BIN="$PURETIME_DIR/src/puretime"
+MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
-OUTPUT_DIR="${1:-/tmp/puretime_overhead_$(date +%Y%m%d_%H%M%S)}"
-LATENCY_FILE="$OUTPUT_DIR/latency_overhead.csv"
-RESOURCE_FILE="$OUTPUT_DIR/resource_overhead.csv"
+OUTPUT_DIR="${1:-/tmp/puretime_exp_type_$(date +%Y%m%d_%H%M%S)}"
+RESULTS_FILE="$OUTPUT_DIR/results.csv"
+
+# Docker image names
+GRAPH_BFS_IMAGE="graph-bfs"
+NETWORK_UPLOADER_IMAGE="network-uploader"
+COMPRESSION_IMAGE="compression"
 
 # Network/Block I/O 설정
 TESTFILE_PATH="/data/tmp.bin"
+MINIO_IP="165.194.27.225"
+MINIO_ENDPOINT="http://$MINIO_IP:9000"
 HDD_MOUNT="/mnt/hdd/tmp"
 
 # =============================================================================
@@ -77,90 +85,186 @@ check_prerequisites() {
         exit 1
     fi
     
-    # Build Docker images
+    if [ ! -f "$MAKESPAN" ]; then
+        log_fail "Makespan analyzer not found at $MAKESPAN"
+        exit 1
+    fi
+    
+    # Build Docker images if needed
     log_info "Building Docker images..."
-    for workload in "${WORKLOADS[@]}"; do
-        docker build -t "$workload" "$PURETIME_DIR/funcs/$workload" > /dev/null 2>&1
-    done
+    docker build -t "$GRAPH_BFS_IMAGE" "$PURETIME_DIR/funcs/graph-bfs" > /dev/null 2>&1
+    docker build -t "$NETWORK_UPLOADER_IMAGE" "$PURETIME_DIR/funcs/network-uploader" > /dev/null 2>&1
+    docker build -t "$COMPRESSION_IMAGE" "$PURETIME_DIR/funcs/compression" > /dev/null 2>&1
     
     log_pass "Prerequisites OK"
 }
 
 setup_output() {
     mkdir -p "$OUTPUT_DIR"
-    echo "workload,puretime_enabled,iteration,execution_time_ms" > "$LATENCY_FILE"
-    echo "timestamp,puretime_enabled,cpu_percent,memory_mb" > "$RESOURCE_FILE"
+    echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,t_puretime_ms,t_noise_cpu,t_noise_net,t_noise_bio" > "$RESULTS_FILE"
     log_info "Output directory: $OUTPUT_DIR"
 }
 
-get_container_execution_time() {
-    local cid="$1"
-    local log=$(docker logs "$cid" 2>/dev/null)
+# JSON 결과를 CSV로 변환하여 저장
+save_puretime_results() {
+    local json_result="$1"
+    local resource_type="$2"
+    local count="$3"
+    local iteration="$4"
+
+    echo "$json_result" | jq -r --arg type "$resource_type" --arg cnt "$count" --arg iter "$iteration" '
+        .[] | [
+            .cgroup_id,
+            $type,
+            ($cnt | tonumber),
+            ($iter | tonumber),
+            (.original_makespan / 1000000),
+            (.noise_free_makespan / 1000000),
+            (.wait_cpu / 1000000),
+            (.wait_net / 1000000),
+            (.wait_bio / 1000000)
+        ] | @csv
+    ' >> "$RESULTS_FILE"
+}
+
+get_latest_trace() {
+    ls -t /var/log/puretime/trace_*.jsonl 2>/dev/null | head -1
+}
+
+# =============================================================================
+# Container Management Functions
+# =============================================================================
+
+# 컨테이너 실행 및 cgroup ID 수집 (run_with_function.sh 패턴)
+declare -a CONTAINER_IDS
+declare -a CONTAINER_CGROUP_IDS
+
+start_containers() {
+    local image="$1"
+    local count="$2"
+    local extra_opts="$3"
     
-    local elapsed=$(echo "$log" | grep -oP '"elapsed_ms"\s*:\s*\K[0-9.]+' | head -1)
-    if [ -z "$elapsed" ]; then
-        elapsed=$(echo "$log" | grep -oP '"total_elapsed_ms"\s*:\s*\K[0-9.]+' | head -1)
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+    
+    for i in $(seq 1 $count); do
+        local cid=$(docker run -d $extra_opts "$image")
+        CONTAINER_IDS+=("$cid")
+        
+        # cgroup ID 추출 (run_with_function.sh 방식)
+        local pid=$(docker inspect --format '{{.State.Pid}}' "$cid")
+        local cgroup_path=$(cat /proc/$pid/cgroup | grep -oP '0::/\K.*')
+        local cgroup_id=$(stat -c %i "/sys/fs/cgroup/${cgroup_path}")
+        CONTAINER_CGROUP_IDS+=("$cgroup_id")
+    done
+}
+
+wait_containers() {
+    for cid in "${CONTAINER_IDS[@]}"; do
+        docker wait "$cid" > /dev/null 2>&1 || true
+    done
+}
+
+stop_containers() {
+    for cid in "${CONTAINER_IDS[@]}"; do
+        docker rm -f "$cid" > /dev/null 2>&1 || true
+    done
+    CONTAINER_IDS=()
+    CONTAINER_CGROUP_IDS=()
+}
+
+save_cgroup_ids() {
+    local filepath="$1"
+    > "$filepath"
+    for cgroup_id in "${CONTAINER_CGROUP_IDS[@]}"; do
+        echo "$cgroup_id" >> "$filepath"
+    done
+}
+
+# =============================================================================
+# Network Configuration (run_with_function.sh 참조)
+# =============================================================================
+
+setup_network_throttle() {
+    local iface=$(ip route get $MINIO_IP 2>/dev/null | awk '{print $5; exit}')
+    if [ -z "$iface" ]; then
+        iface=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
     fi
     
-    echo "${elapsed:-0}"
+    log_info "Setting up network throttle on $iface..."
+    
+    # Disable offloads
+    ethtool -K "$iface" tso off gso off gro off 2>/dev/null || true
+    
+    # Add bandwidth limit
+    tc qdisc del dev "$iface" root 2>/dev/null || true  # 기존 qdisc 제거
+    tc qdisc add dev "$iface" root handle 1: htb default 10  # htb를 root qdisc로 설정 (대역폭 제한용)
+    tc class add dev "$iface" parent 1: classid 1:10 htb rate 10mbit burst 15k  # 10Mbps 클래스 생성
+    tc qdisc add dev "$iface" parent 1:10 handle 10: fq_codel  # fq_codel을 leaf qdisc로 설정 (fair queueing용)
+    
+    echo "$iface"
 }
 
-get_docker_opts() {
-    local workload="$1"
-    
-    case "$workload" in
-        "graph-bfs")
-            echo "--cpuset-cpus=0"
-            ;;
-        "network-uploader")
-            echo "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
-            ;;
-        "compression")
-            echo "-v $HDD_MOUNT:/tmp"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
+teardown_network_throttle() {
+    local iface="$1"
+    log_info "Removing network throttle..."
+    tc qdisc del dev "$iface" root 2>/dev/null || true
+    ethtool -K "$iface" tso on gso on gro on 2>/dev/null || true
 }
 
 # =============================================================================
-# Resource Monitoring
+# Block I/O Configuration
 # =============================================================================
 
-MONITOR_PID=""
+BLOCK_DEVICE=""
+ORIGINAL_SCHEDULER=""
 
-start_resource_monitor() {
-    local puretime_enabled="$1"
+setup_io_scheduler() {
+    local docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+    local mount_point=$(df "$docker_root" 2>/dev/null | tail -1 | awk '{print $1}')
+    BLOCK_DEVICE=$(basename "$mount_point" | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
     
-    (
-        while true; do
-            local timestamp=$(date +%s.%N)
-            
-            # CPU 사용률 (system-wide)
-            local cpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-            
-            # PureTime 프로세스 메모리 (있는 경우)
-            local mem=0
-            if [ "$puretime_enabled" = "true" ]; then
-                local pt_pid=$(pgrep -f "puretime" | head -1)
-                if [ -n "$pt_pid" ]; then
-                    mem=$(ps -o rss= -p $pt_pid 2>/dev/null | awk '{print $1/1024}')
-                fi
-            fi
-            
-            echo "$timestamp,$puretime_enabled,$cpu,$mem" >> "$RESOURCE_FILE"
-            sleep $MONITOR_INTERVAL
-        done
-    ) &
-    MONITOR_PID=$!
+    if [ -z "$BLOCK_DEVICE" ]; then
+        BLOCK_DEVICE=$(lsblk -d -n -o NAME,TYPE | grep disk | head -1 | awk '{print $1}')
+    fi
+    
+    local sched_path="/sys/block/$BLOCK_DEVICE/queue/scheduler"
+    if [ -f "$sched_path" ]; then
+        ORIGINAL_SCHEDULER=$(cat "$sched_path" | grep -oP '\[\K[^\]]+')
+        if [ "$ORIGINAL_SCHEDULER" != "bfq" ]; then
+            log_info "Setting I/O scheduler to BFQ on $BLOCK_DEVICE..."
+            echo bfq > "$sched_path" 2>/dev/null || true
+        fi
+    fi
 }
 
-stop_resource_monitor() {
-    if [ -n "$MONITOR_PID" ]; then
-        kill $MONITOR_PID 2>/dev/null || true
-        wait $MONITOR_PID 2>/dev/null || true
-        MONITOR_PID=""
+restore_io_scheduler() {
+    if [ -n "$BLOCK_DEVICE" ] && [ -n "$ORIGINAL_SCHEDULER" ] && [ "$ORIGINAL_SCHEDULER" != "bfq" ]; then
+        local sched_path="/sys/block/$BLOCK_DEVICE/queue/scheduler"
+        echo "$ORIGINAL_SCHEDULER" > "$sched_path" 2>/dev/null || true
+    fi
+}
+
+# =============================================================================
+# Test file for network upload
+# =============================================================================
+
+# Test file for network upload
+TESTFILE_PATH="/data/tmp.bin"
+SMALL_FILE_URL="https://github.com/STEllAR-GROUP/hpx/archive/refs/tags/1.4.0.zip"
+# LARGE_FILE_URL="https://download.pytorch.org/models/resnet50-19c8e357.pth"
+
+# Create test file for network upload
+create_testfile_by_downloading() {
+    log_info "Downloading test file..."
+    curl -L -o "$TESTFILE_PATH" "$SMALL_FILE_URL"
+    log_pass "Test file created: $TESTFILE_PATH"
+}
+
+ensure_testfile() {
+    if [ ! -f "$TESTFILE_PATH" ]; then
+        mkdir -p "$(dirname $TESTFILE_PATH)"
+        create_testfile_by_downloading
     fi
 }
 
@@ -168,163 +272,121 @@ stop_resource_monitor() {
 # Experiment Functions
 # =============================================================================
 
-run_workload_without_puretime() {
-    local workload="$1"
+run_cpu_experiment() {
+    local count="$1"
     local iteration="$2"
     
-    local opts=$(get_docker_opts "$workload")
-    local cid=$(docker run -d $opts "$workload")
-    docker wait "$cid" > /dev/null 2>&1 || true
+    log_info "CPU experiment: $count containers, iteration $iteration"
     
-    local exec_time=$(get_container_execution_time "$cid")
-    docker rm -f "$cid" > /dev/null 2>&1 || true
-    
-    echo "$workload,false,$iteration,$exec_time" >> "$LATENCY_FILE"
-    echo "$exec_time"
-}
-
-run_workload_with_puretime() {
-    local workload="$1"
-    local iteration="$2"
+    local cgroup_file="$OUTPUT_DIR/cgroups_cpu_${count}_${iteration}.txt"
     
     # Start PureTime
-    $PURETIME_BIN -t $TRACE_DURATION &
+    $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
     
-    local opts=$(get_docker_opts "$workload")
-    local cid=$(docker run -d $opts "$workload")
-    docker wait "$cid" > /dev/null 2>&1 || true
+    local trace_file=$(get_latest_trace)
     
-    local exec_time=$(get_container_execution_time "$cid")
-    docker rm -f "$cid" > /dev/null 2>&1 || true
+    # Start containers (CPU pinned to core 0)
+    start_containers "$GRAPH_BFS_IMAGE" "$count" "--cpuset-cpus=0"
+    save_cgroup_ids "$cgroup_file"
+    
+    # Wait for all containers to complete
+    wait_containers
     
     # Stop PureTime
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
     
-    echo "$workload,true,$iteration,$exec_time" >> "$LATENCY_FILE"
-    echo "$exec_time"
+    # Analyze with PureTime
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
+
+    # Save results to CSV
+    save_puretime_results "$puretime_result" "cpu" "$count" "$iteration"
+
+    # Cleanup
+    stop_containers
 }
 
-# =============================================================================
-# Analysis Functions
-# =============================================================================
-
-analyze_results() {
-    log_info "Analyzing results..."
+run_network_experiment() {
+    local count="$1"
+    local iteration="$2"
     
-    python3 << EOF
-import csv
-from collections import defaultdict
-import statistics
-
-# Load latency data
-latencies = defaultdict(lambda: {'with': [], 'without': []})
-with open('$LATENCY_FILE', 'r') as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        workload = row['workload']
-        enabled = row['puretime_enabled'] == 'true'
-        time_ms = float(row['execution_time_ms'])
-        
-        if enabled:
-            latencies[workload]['with'].append(time_ms)
-        else:
-            latencies[workload]['without'].append(time_ms)
-
-# Load resource data
-resources = {'with': [], 'without': []}
-with open('$RESOURCE_FILE', 'r') as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        enabled = row['puretime_enabled'] == 'true'
-        cpu = float(row['cpu_percent']) if row['cpu_percent'] else 0
-        mem = float(row['memory_mb']) if row['memory_mb'] else 0
-        
-        if enabled:
-            resources['with'].append({'cpu': cpu, 'mem': mem})
-        else:
-            resources['without'].append({'cpu': cpu, 'mem': mem})
-
-# Print summary
-print("\n" + "=" * 70)
-print("PureTime Overhead Analysis")
-print("=" * 70)
-
-print("\n[Latency Overhead]")
-print("-" * 70)
-print(f"{'Workload':<20} {'Without (ms)':<15} {'With (ms)':<15} {'Overhead':<15}")
-print("-" * 70)
-
-total_without = []
-total_with = []
-
-for workload in sorted(latencies.keys()):
-    data = latencies[workload]
-    avg_without = statistics.mean(data['without']) if data['without'] else 0
-    avg_with = statistics.mean(data['with']) if data['with'] else 0
-    overhead_pct = ((avg_with - avg_without) / avg_without * 100) if avg_without > 0 else 0
+    log_info "Network experiment: $count containers, iteration $iteration"
     
-    total_without.extend(data['without'])
-    total_with.extend(data['with'])
+    ensure_testfile
+    local cgroup_file="$OUTPUT_DIR/cgroups_net_${count}_${iteration}.txt"
     
-    print(f"{workload:<20} {avg_without:<15.2f} {avg_with:<15.2f} {overhead_pct:>+.2f}%")
+    # Setup network throttle
+    local iface=$(setup_network_throttle)
+    
+    # Start PureTime
+    $PURETIME_BIN -v -t $TRACE_DURATION &
+    local puretime_pid=$!
+    sleep 2
+    
+    local trace_file=$(get_latest_trace)
+    
+    # Start containers
+    start_containers "$NETWORK_UPLOADER_IMAGE" "$count" "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
+    save_cgroup_ids "$cgroup_file"
+    
+    # Wait for completion
+    wait_containers
+    
+    # Stop PureTime
+    kill $puretime_pid 2>/dev/null || true
+    wait $puretime_pid 2>/dev/null || true
+    
+    # Analyze
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
 
-# Overall average
-overall_without = statistics.mean(total_without) if total_without else 0
-overall_with = statistics.mean(total_with) if total_with else 0
-overall_overhead = ((overall_with - overall_without) / overall_without * 100) if overall_without > 0 else 0
+    # Save results to CSV
+    save_puretime_results "$puretime_result" "network" "$count" "$iteration"
 
-print("-" * 70)
-print(f"{'Overall':<20} {overall_without:<15.2f} {overall_with:<15.2f} {overall_overhead:>+.2f}%")
-
-print("\n[Resource Overhead]")
-print("-" * 70)
-
-if resources['with']:
-    avg_cpu_with = statistics.mean([r['cpu'] for r in resources['with']])
-    avg_mem_with = statistics.mean([r['mem'] for r in resources['with'] if r['mem'] > 0])
-    print(f"PureTime CPU Usage: {avg_cpu_with:.2f}%")
-    print(f"PureTime Memory Usage: {avg_mem_with:.2f} MB")
-else:
-    print("No resource data with PureTime enabled")
-
-print("=" * 70)
-
-# Save summary to JSON
-import json
-summary = {
-    'latency_overhead': {
-        'by_workload': {},
-        'overall_percent': round(overall_overhead, 2)
-    },
-    'resource_overhead': {}
+    # Cleanup
+    stop_containers
+    teardown_network_throttle "$iface"
 }
 
-for workload in latencies.keys():
-    data = latencies[workload]
-    avg_without = statistics.mean(data['without']) if data['without'] else 0
-    avg_with = statistics.mean(data['with']) if data['with'] else 0
-    overhead_pct = ((avg_with - avg_without) / avg_without * 100) if avg_without > 0 else 0
+run_block_io_experiment() {
+    local count="$1"
+    local iteration="$2"
     
-    summary['latency_overhead']['by_workload'][workload] = {
-        'without_ms': round(avg_without, 2),
-        'with_ms': round(avg_with, 2),
-        'overhead_percent': round(overhead_pct, 2)
-    }
+    log_info "Block I/O experiment: $count containers, iteration $iteration"
+    
+    local cgroup_file="$OUTPUT_DIR/cgroups_bio_${count}_${iteration}.txt"
+    
+    # Setup I/O scheduler
+    setup_io_scheduler
+    
+    # Start PureTime
+    $PURETIME_BIN -v -t $TRACE_DURATION &
+    local puretime_pid=$!
+    sleep 2
+    
+    local trace_file=$(get_latest_trace)
+    
+    # Start containers (with HDD mount)
+    start_containers "$COMPRESSION_IMAGE" "$count" "-v $HDD_MOUNT:/tmp"
+    save_cgroup_ids "$cgroup_file"
+    
+    # Wait for completion
+    wait_containers
+    
+    # Stop PureTime
+    kill $puretime_pid 2>/dev/null || true
+    wait $puretime_pid 2>/dev/null || true
+    
+    # Analyze
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
 
-if resources['with']:
-    summary['resource_overhead'] = {
-        'cpu_percent': round(avg_cpu_with, 2),
-        'memory_mb': round(avg_mem_with, 2)
-    }
+    # Save results to CSV
+    save_puretime_results "$puretime_result" "block_io" "$count" "$iteration"
 
-with open('$OUTPUT_DIR/summary.json', 'w') as f:
-    json.dump(summary, f, indent=2)
-
-print(f"\nSummary saved to: $OUTPUT_DIR/summary.json")
-EOF
+    # Cleanup
+    stop_containers
+    restore_io_scheduler
 }
 
 # =============================================================================
@@ -332,52 +394,48 @@ EOF
 # =============================================================================
 
 main() {
+    # sudo rm -rf /tmp/puretime_* && sudo rm -rf /var/log/puretime
+
     check_prerequisites
     setup_output
     
-    log_info "Starting Overhead Measurement Experiments"
-    log_info "=========================================="
-    log_info "Workloads: ${WORKLOADS[*]}"
-    log_info "Iterations: $ITERATIONS"
+    log_info "Starting Noise Type Accuracy Experiments"
+    log_info "========================================="
+    
+    # # CPU Experiments
+    # log_info ""
+    # log_info "=== CPU Contention Experiments ==="
+    # for count in "${CPU_CONTAINER_COUNTS[@]}"; do
+    #     for iter in $(seq 1 $ITERATIONS); do
+    #         run_cpu_experiment "$count" "$iter"
+    #     done
+    # done
+    
+    # # Network Experiments
+    # log_info ""
+    # log_info "=== Network Contention Experiments ==="
+    # for count in "${NET_CONTAINER_COUNTS[@]}"; do
+    #     for iter in $(seq 1 $ITERATIONS); do
+    #         run_network_experiment "$count" "$iter"
+    #     done
+    # done
+    
+    # Block I/O Experiments
     log_info ""
-    
-    # Phase 1: Run without PureTime
-    log_info "=== Phase 1: Without PureTime ==="
-    start_resource_monitor "false"
-    
-    for workload in "${WORKLOADS[@]}"; do
-        log_info "Testing $workload..."
+    log_info "=== Block I/O Contention Experiments ==="
+    for count in "${BIO_CONTAINER_COUNTS[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
-            local time=$(run_workload_without_puretime "$workload" "$iter")
-            log_info "  Iteration $iter: ${time}ms"
+            run_block_io_experiment "$count" "$iter"
         done
     done
     
-    stop_resource_monitor
-    sleep 5  # Cool down
-    
-    # Phase 2: Run with PureTime
     log_info ""
-    log_info "=== Phase 2: With PureTime ==="
-    start_resource_monitor "true"
-    
-    for workload in "${WORKLOADS[@]}"; do
-        log_info "Testing $workload..."
-        for iter in $(seq 1 $ITERATIONS); do
-            local time=$(run_workload_with_puretime "$workload" "$iter")
-            log_info "  Iteration $iter: ${time}ms"
-        done
-    done
-    
-    stop_resource_monitor
-    
-    # Analyze results
-    analyze_results
-    
+    log_info "========================================="
+    log_info "Experiments completed!"
+    log_info "Results saved to: $RESULTS_FILE"
     log_info ""
-    log_info "=========================================="
-    log_info "Overhead measurement completed!"
-    log_info "Results saved to: $OUTPUT_DIR"
+    log_info "To compute accuracy metrics:"
+    log_info "  python3 $SCRIPT_DIR/analysis/compute_metrics.py $RESULTS_FILE"
 }
 
 main "$@"
