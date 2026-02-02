@@ -100,7 +100,30 @@ check_prerequisites() {
 
 setup_output() {
     mkdir -p "$OUTPUT_DIR"
+    echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,t_puretime_ms,t_noise_cpu,t_noise_net,t_noise_bio" > "$RESULTS_FILE"
     log_info "Output directory: $OUTPUT_DIR"
+}
+
+# JSON 결과를 CSV로 변환하여 저장
+save_puretime_results() {
+    local json_result="$1"
+    local resource_type="$2"
+    local count="$3"
+    local iteration="$4"
+
+    echo "$json_result" | jq -r --arg type "$resource_type" --arg cnt "$count" --arg iter "$iteration" '
+        .[] | [
+            .cgroup_id,
+            $type,
+            ($cnt | tonumber),
+            ($iter | tonumber),
+            (.original_makespan / 1000000),
+            (.noise_free_makespan / 1000000),
+            (.wait_cpu / 1000000),
+            (.wait_net / 1000000),
+            (.wait_bio / 1000000)
+        ] | @csv
+    ' >> "$RESULTS_FILE"
 }
 
 get_latest_trace() {
@@ -257,7 +280,7 @@ run_cpu_experiment() {
     local cgroup_file="$OUTPUT_DIR/cgroups_cpu_${count}_${iteration}.txt"
     
     # Start PureTime
-    $PURETIME_BIN -t $TRACE_DURATION &
+    $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
     
@@ -270,31 +293,18 @@ run_cpu_experiment() {
     # Wait for all containers to complete
     wait_containers
     
-    # Get execution times from container logs
-    local total_time=0
-    for cid in "${CONTAINER_IDS[@]}"; do
-        local t=$(get_container_execution_time "$cid")
-        total_time=$(echo "$total_time + $t" | bc)
-    done
-    local avg_time=$(echo "scale=2; $total_time / $count" | bc)
-    
     # Stop PureTime
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
     
     # Analyze with PureTime
-    local puretime_result=$(python3 "$MAKESPAN_ANALYZER" "$trace_file" -c "$cgroup_file" -j 2>/dev/null)
-    local t_puretime=$(echo "$puretime_result" | grep -oP '"noise_free_makespan_ns"\s*:\s*\K[0-9]+' | head -1)
-    t_puretime=$(echo "scale=2; ${t_puretime:-0} / 1000000" | bc)  # ns -> ms
-    
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" 2>/dev/null)
+
+    # Save results to CSV
+    save_puretime_results "$puretime_result" "cpu" "$count" "$iteration"
+
     # Cleanup
     stop_containers
-    
-    # Save results
-    local cgroup_list=$(IFS=';'; echo "${CONTAINER_CGROUP_IDS[*]}")
-    echo "cpu,$count,$iteration,$avg_time,$t_puretime,$cgroup_list" >> "$RESULTS_FILE"
-    
-    log_info "  T_contention=${avg_time}ms, T_puretime=${t_puretime}ms"
 }
 
 run_network_experiment() {
@@ -310,7 +320,7 @@ run_network_experiment() {
     local iface=$(setup_network_throttle)
     
     # Start PureTime
-    $PURETIME_BIN -t $TRACE_DURATION &
+    $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
     
@@ -336,19 +346,14 @@ run_network_experiment() {
     wait $puretime_pid 2>/dev/null || true
     
     # Analyze
-    local puretime_result=$(python3 "$MAKESPAN_ANALYZER" "$trace_file" -c "$cgroup_file" -j 2>/dev/null)
-    local t_puretime=$(echo "$puretime_result" | grep -oP '"noise_free_makespan_ns"\s*:\s*\K[0-9]+' | head -1)
-    t_puretime=$(echo "scale=2; ${t_puretime:-0} / 1000000" | bc)
-    
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" 2>/dev/null)
+
+    # Save results to CSV
+    save_puretime_results "$puretime_result" "network" "$count" "$iteration"
+
     # Cleanup
     stop_containers
     teardown_network_throttle "$iface"
-    
-    # Save results
-    local cgroup_list=$(IFS=';'; echo "${CONTAINER_CGROUP_IDS[*]}")
-    echo "network,$count,$iteration,$avg_time,$t_puretime,$cgroup_list" >> "$RESULTS_FILE"
-    
-    log_info "  T_contention=${avg_time}ms, T_puretime=${t_puretime}ms"
 }
 
 run_block_io_experiment() {
@@ -363,7 +368,7 @@ run_block_io_experiment() {
     setup_io_scheduler
     
     # Start PureTime
-    $PURETIME_BIN -t $TRACE_DURATION &
+    $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
     
@@ -389,19 +394,14 @@ run_block_io_experiment() {
     wait $puretime_pid 2>/dev/null || true
     
     # Analyze
-    local puretime_result=$(python3 "$MAKESPAN_ANALYZER" "$trace_file" -c "$cgroup_file" -j 2>/dev/null)
-    local t_puretime=$(echo "$puretime_result" | grep -oP '"noise_free_makespan_ns"\s*:\s*\K[0-9]+' | head -1)
-    t_puretime=$(echo "scale=2; ${t_puretime:-0} / 1000000" | bc)
-    
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" 2>/dev/null)
+
+    # Save results to CSV
+    save_puretime_results "$puretime_result" "block_io" "$count" "$iteration"
+
     # Cleanup
     stop_containers
     restore_io_scheduler
-    
-    # Save results
-    local cgroup_list=$(IFS=';'; echo "${CONTAINER_CGROUP_IDS[*]}")
-    echo "block_io,$count,$iteration,$avg_time,$t_puretime,$cgroup_list" >> "$RESULTS_FILE"
-    
-    log_info "  T_contention=${avg_time}ms, T_puretime=${t_puretime}ms"
 }
 
 # =============================================================================
