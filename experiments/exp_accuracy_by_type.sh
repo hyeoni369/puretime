@@ -49,7 +49,8 @@ COMPRESSION_IMAGE="compression"
 
 # Network/Block I/O 설정
 TESTFILE_PATH="/data/tmp.bin"
-MINIO_ENDPOINT="http://165.194.27.225:9000"
+MINIO_IP="165.194.27.225"
+MINIO_ENDPOINT="http://$MINIO_IP:9000"
 HDD_MOUNT="/mnt/hdd/tmp"
 
 # =============================================================================
@@ -83,8 +84,8 @@ check_prerequisites() {
         exit 1
     fi
     
-    if [ ! -f "$MAKESPAN_ANALYZER" ]; then
-        log_fail "Makespan analyzer not found at $MAKESPAN_ANALYZER"
+    if [ ! -f "$MAKESPAN" ]; then
+        log_fail "Makespan analyzer not found at $MAKESPAN"
         exit 1
     fi
     
@@ -148,20 +149,6 @@ stop_containers() {
     CONTAINER_CGROUP_IDS=()
 }
 
-get_container_execution_time() {
-    # 컨테이너 로그에서 실행 시간 추출 (JSON output의 elapsed_ms 또는 total_elapsed_ms)
-    local cid="$1"
-    local log=$(docker logs "$cid" 2>/dev/null)
-    
-    # elapsed_ms 또는 total_elapsed_ms 필드 추출
-    local elapsed=$(echo "$log" | grep -oP '"elapsed_ms"\s*:\s*\K[0-9.]+' | head -1)
-    if [ -z "$elapsed" ]; then
-        elapsed=$(echo "$log" | grep -oP '"total_elapsed_ms"\s*:\s*\K[0-9.]+' | head -1)
-    fi
-    
-    echo "${elapsed:-0}"
-}
-
 save_cgroup_ids() {
     local filepath="$1"
     > "$filepath"
@@ -175,7 +162,7 @@ save_cgroup_ids() {
 # =============================================================================
 
 setup_network_throttle() {
-    local iface=$(ip route get 165.194.27.225 2>/dev/null | awk '{print $5; exit}')
+    local iface=$(ip route get $MINIO_IP 2>/dev/null | awk '{print $5; exit}')
     if [ -z "$iface" ]; then
         iface=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5; exit}')
     fi
@@ -186,10 +173,10 @@ setup_network_throttle() {
     ethtool -K "$iface" tso off gso off gro off 2>/dev/null || true
     
     # Add bandwidth limit
-    tc qdisc del dev "$iface" root 2>/dev/null || true
-    tc qdisc add dev "$iface" root handle 1: htb default 10
-    tc class add dev "$iface" parent 1: classid 1:10 htb rate 10mbit burst 15k
-    tc qdisc add dev "$iface" parent 1:10 handle 10: fq_codel
+    tc qdisc del dev "$iface" root 2>/dev/null || true  # 기존 qdisc 제거
+    tc qdisc add dev "$iface" root handle 1: htb default 10  # htb를 root qdisc로 설정 (대역폭 제한용)
+    tc class add dev "$iface" parent 1: classid 1:10 htb rate 10mbit burst 15k  # 10Mbps 클래스 생성
+    tc qdisc add dev "$iface" parent 1:10 handle 10: fq_codel  # fq_codel을 leaf qdisc로 설정 (fair queueing용)
     
     echo "$iface"
 }
@@ -238,11 +225,22 @@ restore_io_scheduler() {
 # Test file for network upload
 # =============================================================================
 
+# Test file for network upload
+TESTFILE_PATH="/data/tmp.bin"
+SMALL_FILE_URL="https://github.com/STEllAR-GROUP/hpx/archive/refs/tags/1.4.0.zip"
+# LARGE_FILE_URL="https://download.pytorch.org/models/resnet50-19c8e357.pth"
+
+# Create test file for network upload
+create_testfile_by_downloading() {
+    log_info "Downloading test file..."
+    curl -L -o "$TESTFILE_PATH" "$SMALL_FILE_URL"
+    log_pass "Test file created: $TESTFILE_PATH"
+}
+
 ensure_testfile() {
     if [ ! -f "$TESTFILE_PATH" ]; then
-        log_info "Creating test file for network upload..."
         mkdir -p "$(dirname $TESTFILE_PATH)"
-        dd if=/dev/urandom of="$TESTFILE_PATH" bs=1M count=50 2>/dev/null
+        create_testfile_by_downloading
     fi
 }
 
