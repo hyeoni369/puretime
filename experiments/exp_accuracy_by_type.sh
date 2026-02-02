@@ -21,11 +21,12 @@ set -e
 # =============================================================================
 
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
-# Solo(1)는 baseline으로 자동 실행됨
-CONTENTION_CONTAINERS=4
+CPU_CONTAINER_COUNTS=(1 2 4)
+NET_CONTAINER_COUNTS=(1 2 4)
+BIO_CONTAINER_COUNTS=(1 2 4)
 
 # 반복 실험 횟수
-ITERATIONS=10
+ITERATIONS=2
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
 TRACE_DURATION=120
@@ -298,7 +299,7 @@ run_cpu_experiment() {
     wait $puretime_pid 2>/dev/null || true
     
     # Analyze with PureTime
-    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" 2>/dev/null)
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
 
     # Save results to CSV
     save_puretime_results "$puretime_result" "cpu" "$count" "$iteration"
@@ -409,6 +410,8 @@ run_block_io_experiment() {
 # =============================================================================
 
 main() {
+    # sudo rm -rf /tmp/puretime_* && sudo rm -rf /var/log/puretime
+
     check_prerequisites
     setup_output
     
@@ -424,23 +427,23 @@ main() {
         done
     done
     
-    # Network Experiments
-    log_info ""
-    log_info "=== Network Contention Experiments ==="
-    for count in "${NET_CONTAINER_COUNTS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
-            run_network_experiment "$count" "$iter"
-        done
-    done
+    # # Network Experiments
+    # log_info ""
+    # log_info "=== Network Contention Experiments ==="
+    # for count in "${NET_CONTAINER_COUNTS[@]}"; do
+    #     for iter in $(seq 1 $ITERATIONS); do
+    #         run_network_experiment "$count" "$iter"
+    #     done
+    # done
     
-    # Block I/O Experiments
-    log_info ""
-    log_info "=== Block I/O Contention Experiments ==="
-    for count in "${BIO_CONTAINER_COUNTS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
-            run_block_io_experiment "$count" "$iter"
-        done
-    done
+    # # Block I/O Experiments
+    # log_info ""
+    # log_info "=== Block I/O Contention Experiments ==="
+    # for count in "${BIO_CONTAINER_COUNTS[@]}"; do
+    #     for iter in $(seq 1 $ITERATIONS); do
+    #         run_block_io_experiment "$count" "$iter"
+    #     done
+    # done
     
     log_info ""
     log_info "========================================="
