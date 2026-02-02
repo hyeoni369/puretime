@@ -480,9 +480,9 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
             })
         print(json.dumps(output, indent=2))
     else:
-        print("=" * 60)
-        print("PureTime Noise-Free Makespan Analysis")
-        print("=" * 60)
+        # print("=" * 60)
+        # print("PureTime Noise-Free Makespan Analysis")
+        # print("=" * 60)
 
         result = [{
             'cgroup_id': cgroup_id,
