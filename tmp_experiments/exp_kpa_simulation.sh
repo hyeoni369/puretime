@@ -49,7 +49,7 @@ TRACE_DURATION=300                      # PureTime 트레이싱 시간
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PURETIME_DIR="$(dirname "$SCRIPT_DIR")"
 PURETIME_BIN="$PURETIME_DIR/src/puretime"
-MAKESPAN_ANALYZER="$SCRIPT_DIR/noise_free_makespan.py"
+MAKESPAN_ANALYZER="$PURETIME_DIR/tests/noise_free_makespan.py"
 
 OUTPUT_DIR="${1:-/tmp/puretime_kpa_sim_$(date +%Y%m%d_%H%M%S)}"
 RESULTS_FILE="$OUTPUT_DIR/kpa_simulation.csv"
