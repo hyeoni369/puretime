@@ -119,6 +119,8 @@ start_resource_monitor() {
         local prev_utime=0
         local prev_stime=0
         local prev_time=0
+        local is_first=1
+        local hz=$(getconf CLK_TCK)  # 시스템 실제 HZ 값 (100, 250, 1000 등)
 
         while true; do
             local timestamp=$(date +%s.%N)
@@ -138,8 +140,8 @@ start_resource_monitor() {
                         local delta_utime=$((utime - prev_utime))
                         local delta_stime=$((stime - prev_stime))
                         local delta_time=$((curr_time - prev_time))
-                        # clock ticks to nanoseconds (assuming HZ=100)
-                        local cpu_time_ns=$(( (delta_utime + delta_stime) * 10000000 ))
+                        # clock ticks to nanoseconds (using actual system HZ)
+                        local cpu_time_ns=$(( (delta_utime + delta_stime) * 1000000000 / hz ))
                         if [ "$delta_time" -gt 0 ]; then
                             cpu=$(awk "BEGIN {printf \"%.2f\", $cpu_time_ns / $delta_time * 100}")
                         fi
@@ -158,8 +160,10 @@ start_resource_monitor() {
                     local cpu_ratio=$(awk "BEGIN {printf \"%.4f\", $cpu / ($total_cpu * 100) * 100}")
                     local mem_ratio=$(awk "BEGIN {printf \"%.4f\", ${mem:-0} / $total_mem * 100}")
 
-                    # 첫 번째 측정은 기준점이므로 스킵 (prev_time이 0이었을 때)
-                    if [ -n "$mem" ] && [ "$cpu" != "0" ]; then
+                    # 첫 번째 측정은 기준점이므로 스킵, 이후 0% CPU도 정상 기록
+                    if [ "$is_first" -eq 1 ]; then
+                        is_first=0
+                    elif [ -n "$mem" ]; then
                         echo "$timestamp,$resource_type,$count,$iteration,$cpu,$mem,$cpu_ratio,$mem_ratio" >> "$RESOURCE_FILE"
                     fi
                 fi
