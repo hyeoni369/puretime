@@ -4,17 +4,11 @@
 # =============================================================================
 #
 # 목적: PureTime 프로세스 자체의 리소스 사용량 측정
-#       (유저스페이스 + eBPF 커널 오버헤드 모두 측정)
 #
 # 측정 항목:
 #   [유저스페이스]
-#   - CPU 사용률 (%)
+#   - CPU 사용률 (%) - 순간 사용률
 #   - 메모리 사용량 (MB)
-#
-#   [eBPF 커널]
-#   - BPF 프로그램 총 실행 시간 (ns)
-#   - BPF 프로그램 실행 횟수
-#   - BPF 맵 메모리 사용량 (bytes)
 #
 # Usage: sudo ./exp_overhead_resource.sh [output_dir]
 # =============================================================================
@@ -96,10 +90,6 @@ check_prerequisites() {
         exit 1
     fi
 
-    if ! command -v bpftool &> /dev/null; then
-        log_warn "bpftool not found - eBPF stats will be unavailable"
-    fi
-
     # Build Docker images if needed
     log_info "Building Docker images..."
     docker build -t "$GRAPH_BFS_IMAGE" "$PURETIME_DIR/funcs/graph-bfs" > /dev/null 2>&1
@@ -112,7 +102,7 @@ check_prerequisites() {
 setup_output() {
     mkdir -p "$OUTPUT_DIR"
     RESOURCE_FILE="$OUTPUT_DIR/resource_usage.csv"
-    echo "timestamp,resource_type,container_count,iteration,cpu_percent,memory_mb,bpf_run_time_ns,bpf_run_cnt,bpf_map_bytes,cpu_ratio_system,mem_ratio_system" > "$RESOURCE_FILE"
+    echo "timestamp,resource_type,container_count,iteration,cpu_percent,memory_mb,cpu_ratio_system,mem_ratio_system" > "$RESOURCE_FILE"
     log_info "Output directory: $OUTPUT_DIR"
 }
 
@@ -126,51 +116,52 @@ start_resource_monitor() {
     local iteration="$3"
 
     (
+        local prev_utime=0
+        local prev_stime=0
+        local prev_time=0
+
         while true; do
             local timestamp=$(date +%s.%N)
-            local pt_pid=$(pgrep -f "puretime" | head -1)
+            local pt_pid=$(pgrep -x "puretime" | head -1)
 
-            if [ -n "$pt_pid" ]; then
-                # PureTime 유저스페이스 CPU 사용률 (ps로 측정)
-                local cpu=$(ps -o %cpu= -p $pt_pid 2>/dev/null | tr -d ' ')
-                # PureTime 유저스페이스 메모리 사용량 (MB)
-                local mem=$(ps -o rss= -p $pt_pid 2>/dev/null | awk '{print $1/1024}')
+            if [ -n "$pt_pid" ] && [ -d "/proc/$pt_pid" ]; then
+                # /proc/[pid]/stat에서 CPU 시간 읽기 (utime, stime)
+                local stat_line=$(cat /proc/$pt_pid/stat 2>/dev/null)
+                if [ -n "$stat_line" ]; then
+                    local utime=$(echo "$stat_line" | awk '{print $14}')
+                    local stime=$(echo "$stat_line" | awk '{print $15}')
+                    local curr_time=$(date +%s%N)
 
-                # puretime 프로세스가 로드한 BPF 프로그램 ID 찾기
-                local bpf_prog_ids=$(for fd in /proc/$pt_pid/fdinfo/*; do
-                    grep "prog_id" "$fd" 2>/dev/null | awk '{print $2}'
-                done | sort -u)
+                    # 순간 CPU 사용률 계산 (이전 측정과의 차이)
+                    local cpu=0
+                    if [ "$prev_time" -ne 0 ]; then
+                        local delta_utime=$((utime - prev_utime))
+                        local delta_stime=$((stime - prev_stime))
+                        local delta_time=$((curr_time - prev_time))
+                        # clock ticks to nanoseconds (assuming HZ=100)
+                        local cpu_time_ns=$(( (delta_utime + delta_stime) * 10000000 ))
+                        if [ "$delta_time" -gt 0 ]; then
+                            cpu=$(awk "BEGIN {printf \"%.2f\", $cpu_time_ns / $delta_time * 100}")
+                        fi
+                    fi
 
-                # 각 BPF 프로그램의 통계 합산
-                local bpf_run_time=0
-                local bpf_run_cnt=0
-                for prog_id in $bpf_prog_ids; do
-                    local stats=$(sudo bpftool prog show id $prog_id 2>/dev/null)
-                    local rt=$(echo "$stats" | grep -oP 'run_time_ns \K[0-9]+')
-                    local rc=$(echo "$stats" | grep -oP 'run_cnt \K[0-9]+')
-                    bpf_run_time=$((bpf_run_time + ${rt:-0}))
-                    bpf_run_cnt=$((bpf_run_cnt + ${rc:-0}))
-                done
+                    prev_utime=$utime
+                    prev_stime=$stime
+                    prev_time=$curr_time
 
-                # puretime 프로세스가 사용하는 BPF 맵 메모리 합산
-                local bpf_map_ids=$(for fd in /proc/$pt_pid/fdinfo/*; do
-                    grep "map_id" "$fd" 2>/dev/null | awk '{print $2}'
-                done | sort -u)
+                    # 메모리 사용량 (MB) - RSS
+                    local mem=$(ps -o rss= -p $pt_pid 2>/dev/null | awk '{print $1/1024}')
 
-                local bpf_map_bytes=0
-                for map_id in $bpf_map_ids; do
-                    local mb=$(sudo bpftool map show id $map_id 2>/dev/null | grep -oP 'memlock \K[0-9]+')
-                    bpf_map_bytes=$((bpf_map_bytes + ${mb:-0}))
-                done
+                    # 시스템 대비 비율 계산
+                    local total_cpu=$(nproc)
+                    local total_mem=$(free -m | awk '/Mem:/ {print $2}')
+                    local cpu_ratio=$(awk "BEGIN {printf \"%.4f\", $cpu / ($total_cpu * 100) * 100}")
+                    local mem_ratio=$(awk "BEGIN {printf \"%.4f\", ${mem:-0} / $total_mem * 100}")
 
-                # 시스템 대비 비율 계산
-                local total_cpu=$(nproc)
-                local total_mem=$(free -m | awk '/Mem:/ {print $2}')
-                local cpu_ratio=$(awk "BEGIN {printf \"%.4f\", $cpu / ($total_cpu * 100) * 100}")
-                local mem_ratio=$(awk "BEGIN {printf \"%.4f\", $mem / $total_mem * 100}")
-
-                if [ -n "$cpu" ] && [ -n "$mem" ]; then
-                    echo "$timestamp,$resource_type,$count,$iteration,$cpu,$mem,$bpf_run_time,$bpf_run_cnt,$bpf_map_bytes,$cpu_ratio,$mem_ratio" >> "$RESOURCE_FILE"
+                    # 첫 번째 측정은 기준점이므로 스킵 (prev_time이 0이었을 때)
+                    if [ -n "$mem" ] && [ "$cpu" != "0" ]; then
+                        echo "$timestamp,$resource_type,$count,$iteration,$cpu,$mem,$cpu_ratio,$mem_ratio" >> "$RESOURCE_FILE"
+                    fi
                 fi
             fi
             sleep $MONITOR_INTERVAL
