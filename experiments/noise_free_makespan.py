@@ -484,13 +484,17 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
         print("PureTime Noise-Free Makespan Analysis")
         print("=" * 60)
 
-        for cgroup_id, result in sorted(results.items()):
+        result = [{
+            'cgroup_id': cgroup_id,
+            'original_makespan': result.original_makespan,
+            'noise_free_makespan': result.noise_free_makespan,
+            'wait_cpu': result.wait_cpu,
+            'wait_net': result.wait_net,
+            'wait_bio': result.wait_bio,
+        } for cgroup_id, result in sorted(results.items())]
+        
             # wait_pct = (result.total_unique_wait / result.original_makespan * 100) \
             #     if result.original_makespan > 0 else 0
-            
-            print(
-                f'{cgroup_id} / {result.original_makespan} / {result.noise_free_makespan} / {result.wait_cpu} / {result.wait_net} / {result.wait_bio}'
-                )
 
             # print(f"\n[Cgroup {cgroup_id}]")
             # print(f"  Original Makespan:   {format_ns(result.original_makespan)}")
