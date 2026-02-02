@@ -26,9 +26,9 @@ set -e
 # =============================================================================
 
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
-CPU_CONTAINER_COUNTS=(1 5 10)
-NET_CONTAINER_COUNTS=(1 5 10)
-BIO_CONTAINER_COUNTS=(1 15 30)
+CPU_CONTAINER_COUNTS=(1 5)
+NET_CONTAINER_COUNTS=(1 5)
+BIO_CONTAINER_COUNTS=(1 15)
 
 # 반복 실험 횟수
 ITERATIONS=1
@@ -112,7 +112,7 @@ check_prerequisites() {
 setup_output() {
     mkdir -p "$OUTPUT_DIR"
     RESOURCE_FILE="$OUTPUT_DIR/resource_usage.csv"
-    echo "timestamp,resource_type,container_count,iteration,cpu_percent,memory_mb,bpf_run_time_ns,bpf_run_cnt,bpf_map_bytes" > "$RESOURCE_FILE"
+    echo "timestamp,resource_type,container_count,iteration,cpu_percent,memory_mb,bpf_run_time_ns,bpf_run_cnt,bpf_map_bytes,cpu_ratio_system,mem_ratio_system" > "$RESOURCE_FILE"
     log_info "Output directory: $OUTPUT_DIR"
 }
 
@@ -136,21 +136,41 @@ start_resource_monitor() {
                 # PureTime 유저스페이스 메모리 사용량 (MB)
                 local mem=$(ps -o rss= -p $pt_pid 2>/dev/null | awk '{print $1/1024}')
 
-                # eBPF 프로그램 통계 (커널 오버헤드)
-                local bpf_stats=$(bpftool prog show 2>/dev/null | grep -A2 "puretime")
-                local bpf_run_time=$(echo "$bpf_stats" | grep -oP 'run_time_ns \K[0-9]+' | head -1)
-                local bpf_run_cnt=$(echo "$bpf_stats" | grep -oP 'run_cnt \K[0-9]+' | head -1)
+                # puretime 프로세스가 로드한 BPF 프로그램 ID 찾기
+                local bpf_prog_ids=$(for fd in /proc/$pt_pid/fdinfo/*; do
+                    grep "prog_id" "$fd" 2>/dev/null | awk '{print $2}'
+                done | sort -u)
 
-                # eBPF 맵 메모리 사용량
-                local bpf_map_bytes=$(bpftool map show 2>/dev/null | grep -oP 'bytes_memlock \K[0-9]+' | awk '{sum+=$1} END {print sum}')
+                # 각 BPF 프로그램의 통계 합산
+                local bpf_run_time=0
+                local bpf_run_cnt=0
+                for prog_id in $bpf_prog_ids; do
+                    local stats=$(sudo bpftool prog show id $prog_id 2>/dev/null)
+                    local rt=$(echo "$stats" | grep -oP 'run_time_ns \K[0-9]+')
+                    local rc=$(echo "$stats" | grep -oP 'run_cnt \K[0-9]+')
+                    bpf_run_time=$((bpf_run_time + ${rt:-0}))
+                    bpf_run_cnt=$((bpf_run_cnt + ${rc:-0}))
+                done
 
-                # 기본값 설정
-                bpf_run_time=${bpf_run_time:-0}
-                bpf_run_cnt=${bpf_run_cnt:-0}
-                bpf_map_bytes=${bpf_map_bytes:-0}
+                # puretime 프로세스가 사용하는 BPF 맵 메모리 합산
+                local bpf_map_ids=$(for fd in /proc/$pt_pid/fdinfo/*; do
+                    grep "map_id" "$fd" 2>/dev/null | awk '{print $2}'
+                done | sort -u)
+
+                local bpf_map_bytes=0
+                for map_id in $bpf_map_ids; do
+                    local mb=$(sudo bpftool map show id $map_id 2>/dev/null | grep -oP 'memlock \K[0-9]+')
+                    bpf_map_bytes=$((bpf_map_bytes + ${mb:-0}))
+                done
+
+                # 시스템 대비 비율 계산
+                local total_cpu=$(nproc)
+                local total_mem=$(free -m | awk '/Mem:/ {print $2}')
+                local cpu_ratio=$(awk "BEGIN {printf \"%.4f\", $cpu / ($total_cpu * 100) * 100}")
+                local mem_ratio=$(awk "BEGIN {printf \"%.4f\", $mem / $total_mem * 100}")
 
                 if [ -n "$cpu" ] && [ -n "$mem" ]; then
-                    echo "$timestamp,$resource_type,$count,$iteration,$cpu,$mem,$bpf_run_time,$bpf_run_cnt,$bpf_map_bytes" >> "$RESOURCE_FILE"
+                    echo "$timestamp,$resource_type,$count,$iteration,$cpu,$mem,$bpf_run_time,$bpf_run_cnt,$bpf_map_bytes,$cpu_ratio,$mem_ratio" >> "$RESOURCE_FILE"
                 fi
             fi
             sleep $MONITOR_INTERVAL
