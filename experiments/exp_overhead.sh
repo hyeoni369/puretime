@@ -38,7 +38,7 @@ PURETIME_DIR="$(dirname "$SCRIPT_DIR")"
 PURETIME_BIN="$PURETIME_DIR/src/puretime"
 MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
-OUTPUT_DIR="${1:-/tmp/puretime_exp_type_$(date +%Y%m%d_%H%M%S)}"
+OUTPUT_DIR="${1:-/tmp/puretime_exp_overhead_time_$(date +%Y%m%d_%H%M%S)}"
 RESULTS_FILE="$OUTPUT_DIR/results.csv"
 
 # Docker image names
