@@ -1,17 +1,15 @@
 #!/bin/bash
 # =============================================================================
-# PureTime Experiment: Noise Removal Accuracy by Contention Type
+# PureTime Experiment: Tracing Overhead Measurement
 # =============================================================================
-# 
-# 목적: CPU, Network, Block I/O 각 노이즈 유형별로 PureTime의 노이즈 제거 정확도 측정
-#       (노이즈 강도는 고정, 유형별 차이만 비교)
 #
-# 정확도 계산 방식:
-#   Ground Truth Noise = T_contention - T_isolated
-#   Removed Noise      = T_contention - T_puretime
-#   Efficiency         = (Removed Noise / Ground Truth Noise) × 100%
+# 목적: PureTime 트레이싱이 함수 실행 시간에 미치는 오버헤드 측정
+#       (Puretime ON vs OFF 상태에서 동일 워크로드 실행 시간 비교)
 #
-# Usage: sudo ./exp_accuracy_by_type.sh [output_dir]
+# 오버헤드 계산 방식:
+#   Overhead = T_with_puretime - T_without_puretime
+#
+# Usage: sudo ./exp_overhead.sh [output_dir]
 # =============================================================================
 
 set -e
@@ -21,9 +19,9 @@ set -e
 # =============================================================================
 
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
-CPU_CONTAINER_COUNTS=(1 2 4)
-NET_CONTAINER_COUNTS=(1 2 4)
-BIO_CONTAINER_COUNTS=(1 10)
+CPU_CONTAINER_COUNTS=(1 5 10)
+NET_CONTAINER_COUNTS=(1 5 10)
+BIO_CONTAINER_COUNTS=(1 15 30)
 
 # 반복 실험 횟수
 ITERATIONS=1
@@ -101,35 +99,10 @@ check_prerequisites() {
 
 setup_output() {
     mkdir -p "$OUTPUT_DIR"
-    echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,t_puretime_ms,t_noise_cpu,t_noise_net,t_noise_bio" > "$RESULTS_FILE"
+    echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,with_puretime" > "$RESULTS_FILE"
     log_info "Output directory: $OUTPUT_DIR"
 }
 
-# JSON 결과를 CSV로 변환하여 저장
-save_puretime_results() {
-    local json_result="$1"
-    local resource_type="$2"
-    local count="$3"
-    local iteration="$4"
-
-    echo "$json_result" | jq -r --arg type "$resource_type" --arg cnt "$count" --arg iter "$iteration" '
-        .[] | [
-            .cgroup_id,
-            $type,
-            ($cnt | tonumber),
-            ($iter | tonumber),
-            (.original_makespan / 1000000),
-            (.noise_free_makespan / 1000000),
-            (.wait_cpu / 1000000),
-            (.wait_net / 1000000),
-            (.wait_bio / 1000000)
-        ] | @csv
-    ' >> "$RESULTS_FILE"
-}
-
-get_latest_trace() {
-    ls -t /var/log/puretime/trace_*.jsonl 2>/dev/null | head -1
-}
 
 # =============================================================================
 # Container Management Functions
@@ -171,6 +144,34 @@ stop_containers() {
     done
     CONTAINER_IDS=()
     CONTAINER_CGROUP_IDS=()
+}
+
+# 컨테이너별 실행 시간 계산 (시작 ~ 종료)
+declare -a CONTAINER_EXEC_TIMES
+
+calculate_container_times() {
+    CONTAINER_EXEC_TIMES=()
+    for cid in "${CONTAINER_IDS[@]}"; do
+        local started_at=$(docker inspect --format '{{.State.StartedAt}}' "$cid")
+        local finished_at=$(docker inspect --format '{{.State.FinishedAt}}' "$cid")
+        local start_ms=$(date -d "$started_at" +%s%3N)
+        local end_ms=$(date -d "$finished_at" +%s%3N)
+        local exec_time_ms=$((end_ms - start_ms))
+        CONTAINER_EXEC_TIMES+=("$exec_time_ms")
+    done
+}
+
+# 컨테이너별 실행 시간을 CSV에 저장
+save_container_times() {
+    local resource_type="$1"
+    local count="$2"
+    local iteration="$3"
+    local with_puretime="${4}"
+    for i in "${!CONTAINER_IDS[@]}"; do
+        local cgroup_id="${CONTAINER_CGROUP_IDS[$i]}"
+        local exec_time="${CONTAINER_EXEC_TIMES[$i]}"
+        echo "$cgroup_id,$resource_type,$count,$iteration,$exec_time,$with_puretime" >> "$RESULTS_FILE"
+    done
 }
 
 save_cgroup_ids() {
@@ -275,34 +276,32 @@ ensure_testfile() {
 run_cpu_experiment() {
     local count="$1"
     local iteration="$2"
+    local with_puretime="$3"
     
     log_info "CPU experiment: $count containers, iteration $iteration"
     
-    local cgroup_file="$OUTPUT_DIR/cgroups_cpu_${count}_${iteration}.txt"
-    
     # Start PureTime
-    $PURETIME_BIN -v -t $TRACE_DURATION &
-    local puretime_pid=$!
+    if [ "$with_puretime" = "true" ]; then
+        $PURETIME_BIN -v -t $TRACE_DURATION &
+        local puretime_pid=$!
+    fi
     sleep 2
-    
-    local trace_file=$(get_latest_trace)
     
     # Start containers (CPU pinned to core 0)
     start_containers "$GRAPH_BFS_IMAGE" "$count" "--cpuset-cpus=0"
-    save_cgroup_ids "$cgroup_file"
     
     # Wait for all containers to complete
     wait_containers
     
     # Stop PureTime
-    kill $puretime_pid 2>/dev/null || true
-    wait $puretime_pid 2>/dev/null || true
-    
-    # Analyze with PureTime
-    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
+    if [ "$with_puretime" = "true" ]; then
+        kill $puretime_pid 2>/dev/null || true
+        wait $puretime_pid 2>/dev/null || true
+    fi
 
-    # Save results to CSV
-    save_puretime_results "$puretime_result" "cpu" "$count" "$iteration"
+    # Calculate and save container execution times
+    calculate_container_times
+    save_container_times "cpu" "$count" "$iteration" "$with_puretime"
 
     # Cleanup
     stop_containers
@@ -311,38 +310,37 @@ run_cpu_experiment() {
 run_network_experiment() {
     local count="$1"
     local iteration="$2"
+    local with_puretime="$3"
     
     log_info "Network experiment: $count containers, iteration $iteration"
     
     ensure_testfile
-    local cgroup_file="$OUTPUT_DIR/cgroups_net_${count}_${iteration}.txt"
     
     # Setup network throttle
     local iface=$(setup_network_throttle)
     
     # Start PureTime
-    $PURETIME_BIN -v -t $TRACE_DURATION &
-    local puretime_pid=$!
+    if [ "$with_puretime" = "true" ]; then
+        $PURETIME_BIN -v -t $TRACE_DURATION &
+        local puretime_pid=$!
+    fi
     sleep 2
-    
-    local trace_file=$(get_latest_trace)
     
     # Start containers
     start_containers "$NETWORK_UPLOADER_IMAGE" "$count" "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
-    save_cgroup_ids "$cgroup_file"
     
     # Wait for completion
     wait_containers
     
     # Stop PureTime
-    kill $puretime_pid 2>/dev/null || true
-    wait $puretime_pid 2>/dev/null || true
-    
-    # Analyze
-    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
+    if [ "$with_puretime" = "true" ]; then
+        kill $puretime_pid 2>/dev/null || true
+        wait $puretime_pid 2>/dev/null || true
+    fi
 
-    # Save results to CSV
-    save_puretime_results "$puretime_result" "network" "$count" "$iteration"
+    # Calculate and save container execution times
+    calculate_container_times
+    save_container_times "network" "$count" "$iteration" "$with_puretime"
 
     # Cleanup
     stop_containers
@@ -352,37 +350,35 @@ run_network_experiment() {
 run_block_io_experiment() {
     local count="$1"
     local iteration="$2"
-    
+    local with_puretime="$3"
+
     log_info "Block I/O experiment: $count containers, iteration $iteration"
-    
-    local cgroup_file="$OUTPUT_DIR/cgroups_bio_${count}_${iteration}.txt"
     
     # Setup I/O scheduler
     setup_io_scheduler
     
     # Start PureTime
-    $PURETIME_BIN -v -t $TRACE_DURATION &
-    local puretime_pid=$!
+    if [ "$with_puretime" = "true" ]; then
+        $PURETIME_BIN -v -t $TRACE_DURATION &
+        local puretime_pid=$!
+    fi
     sleep 2
-    
-    local trace_file=$(get_latest_trace)
     
     # Start containers (with HDD mount)
     start_containers "$COMPRESSION_IMAGE" "$count" "-v $HDD_MOUNT:/tmp"
-    save_cgroup_ids "$cgroup_file"
     
     # Wait for completion
     wait_containers
     
     # Stop PureTime
-    kill $puretime_pid 2>/dev/null || true
-    wait $puretime_pid 2>/dev/null || true
-    
-    # Analyze
-    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
+    if [ "$with_puretime" = "true" ]; then
+        kill $puretime_pid 2>/dev/null || true
+        wait $puretime_pid 2>/dev/null || true
+    fi
 
-    # Save results to CSV
-    save_puretime_results "$puretime_result" "block_io" "$count" "$iteration"
+    # Calculate and save container execution times
+    calculate_container_times
+    save_container_times "block_io" "$count" "$iteration" "$with_puretime"
 
     # Cleanup
     stop_containers
@@ -402,40 +398,43 @@ main() {
     log_info "Starting Noise Type Accuracy Experiments"
     log_info "========================================="
     
-    # # CPU Experiments
-    # log_info ""
-    # log_info "=== CPU Contention Experiments ==="
-    # for count in "${CPU_CONTAINER_COUNTS[@]}"; do
-    #     for iter in $(seq 1 $ITERATIONS); do
-    #         run_cpu_experiment "$count" "$iter"
-    #     done
-    # done
-    
-    # # Network Experiments
-    # log_info ""
-    # log_info "=== Network Contention Experiments ==="
-    # for count in "${NET_CONTAINER_COUNTS[@]}"; do
-    #     for iter in $(seq 1 $ITERATIONS); do
-    #         run_network_experiment "$count" "$iter"
-    #     done
-    # done
+    # CPU Experiments
+    log_info ""
+    log_info "=== CPU Contention Experiments ==="
+    for count in "${CPU_CONTAINER_COUNTS[@]}"; do
+        for iter in $(seq 1 $ITERATIONS); do
+            run_cpu_experiment "$count" "$iter" "false"
+            run_cpu_experiment "$count" "$iter" "true"
+        done
+    done
+    sleep 2
+
+    # Network Experiments
+    log_info ""
+    log_info "=== Network Contention Experiments ==="
+    for count in "${NET_CONTAINER_COUNTS[@]}"; do
+        for iter in $(seq 1 $ITERATIONS); do
+            run_network_experiment "$count" "$iter" "false"
+            run_network_experiment "$count" "$iter" "true"
+        done
+    done
+    sleep 2
     
     # Block I/O Experiments
     log_info ""
     log_info "=== Block I/O Contention Experiments ==="
     for count in "${BIO_CONTAINER_COUNTS[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
-            run_block_io_experiment "$count" "$iter"
+            run_block_io_experiment "$count" "$iter" "false"
+            run_block_io_experiment "$count" "$iter" "true"
         done
     done
+    sleep 2
     
     log_info ""
     log_info "========================================="
     log_info "Experiments completed!"
     log_info "Results saved to: $RESULTS_FILE"
-    log_info ""
-    log_info "To compute accuracy metrics:"
-    log_info "  python3 $SCRIPT_DIR/analysis/compute_metrics.py $RESULTS_FILE"
 }
 
 main "$@"
