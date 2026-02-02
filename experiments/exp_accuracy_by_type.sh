@@ -334,20 +334,12 @@ run_network_experiment() {
     # Wait for completion
     wait_containers
     
-    # Get execution times
-    local total_time=0
-    for cid in "${CONTAINER_IDS[@]}"; do
-        local t=$(get_container_execution_time "$cid")
-        total_time=$(echo "$total_time + $t" | bc)
-    done
-    local avg_time=$(echo "scale=2; $total_time / $count" | bc)
-    
     # Stop PureTime
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
     
     # Analyze
-    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" 2>/dev/null)
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
 
     # Save results to CSV
     save_puretime_results "$puretime_result" "network" "$count" "$iteration"
