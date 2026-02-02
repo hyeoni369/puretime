@@ -23,10 +23,10 @@ set -e
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
 CPU_CONTAINER_COUNTS=(1 2 4)
 NET_CONTAINER_COUNTS=(1 2 4)
-BIO_CONTAINER_COUNTS=(1 2 4)
+BIO_CONTAINER_COUNTS=(1 10)
 
 # 반복 실험 횟수
-ITERATIONS=2
+ITERATIONS=1
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
 TRACE_DURATION=120
@@ -374,20 +374,12 @@ run_block_io_experiment() {
     # Wait for completion
     wait_containers
     
-    # Get execution times
-    local total_time=0
-    for cid in "${CONTAINER_IDS[@]}"; do
-        local t=$(get_container_execution_time "$cid")
-        total_time=$(echo "$total_time + $t" | bc)
-    done
-    local avg_time=$(echo "scale=2; $total_time / $count" | bc)
-    
     # Stop PureTime
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
     
     # Analyze
-    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" 2>/dev/null)
+    local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
 
     # Save results to CSV
     save_puretime_results "$puretime_result" "block_io" "$count" "$iteration"
@@ -410,14 +402,14 @@ main() {
     log_info "Starting Noise Type Accuracy Experiments"
     log_info "========================================="
     
-    # CPU Experiments
-    log_info ""
-    log_info "=== CPU Contention Experiments ==="
-    for count in "${CPU_CONTAINER_COUNTS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
-            run_cpu_experiment "$count" "$iter"
-        done
-    done
+    # # CPU Experiments
+    # log_info ""
+    # log_info "=== CPU Contention Experiments ==="
+    # for count in "${CPU_CONTAINER_COUNTS[@]}"; do
+    #     for iter in $(seq 1 $ITERATIONS); do
+    #         run_cpu_experiment "$count" "$iter"
+    #     done
+    # done
     
     # # Network Experiments
     # log_info ""
@@ -428,14 +420,14 @@ main() {
     #     done
     # done
     
-    # # Block I/O Experiments
-    # log_info ""
-    # log_info "=== Block I/O Contention Experiments ==="
-    # for count in "${BIO_CONTAINER_COUNTS[@]}"; do
-    #     for iter in $(seq 1 $ITERATIONS); do
-    #         run_block_io_experiment "$count" "$iter"
-    #     done
-    # done
+    # Block I/O Experiments
+    log_info ""
+    log_info "=== Block I/O Contention Experiments ==="
+    for count in "${BIO_CONTAINER_COUNTS[@]}"; do
+        for iter in $(seq 1 $ITERATIONS); do
+            run_block_io_experiment "$count" "$iter"
+        done
+    done
     
     log_info ""
     log_info "========================================="
