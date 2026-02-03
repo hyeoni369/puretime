@@ -26,7 +26,7 @@ NET_CONTAINER_COUNTS=(1 2 4 8)
 BIO_CONTAINER_COUNTS=(1 5 10 15)
 
 # 반복 실험 횟수
-ITERATIONS=10
+ITERATIONS=1000
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
 TRACE_DURATION=180
