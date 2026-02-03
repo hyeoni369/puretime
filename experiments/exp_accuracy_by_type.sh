@@ -26,7 +26,7 @@ NET_CONTAINER_COUNTS=(1 2 4 8)
 BIO_CONTAINER_COUNTS=(1 5 10 15)
 
 # 반복 실험 횟수
-ITERATIONS=1000
+ITERATIONS=100
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
 TRACE_DURATION=180
@@ -402,23 +402,25 @@ main() {
     log_info "Starting Noise Type Accuracy Experiments"
     log_info "========================================="
     
-    # # CPU Experiments
-    # log_info ""
-    # log_info "=== CPU Contention Experiments ==="
-    # for count in "${CPU_CONTAINER_COUNTS[@]}"; do
-    #     for iter in $(seq 1 $ITERATIONS); do
-    #         run_cpu_experiment "$count" "$iter"
-    #     done
-    # done
+    # CPU Experiments
+    log_info ""
+    log_info "=== CPU Contention Experiments ==="
+    for count in "${CPU_CONTAINER_COUNTS[@]}"; do
+        for iter in $(seq 1 $ITERATIONS); do
+            run_cpu_experiment "$count" "$iter"
+            sleep 10
+        done
+    done
     
-    # # Network Experiments
-    # log_info ""
-    # log_info "=== Network Contention Experiments ==="
-    # for count in "${NET_CONTAINER_COUNTS[@]}"; do
-    #     for iter in $(seq 1 $ITERATIONS); do
-    #         run_network_experiment "$count" "$iter"
-    #     done
-    # done
+    # Network Experiments
+    log_info ""
+    log_info "=== Network Contention Experiments ==="
+    for count in "${NET_CONTAINER_COUNTS[@]}"; do
+        for iter in $(seq 1 $ITERATIONS); do
+            run_network_experiment "$count" "$iter"
+            sleep 10
+        done
+    done
     
     # Block I/O Experiments
     log_info ""
@@ -426,6 +428,7 @@ main() {
     for count in "${BIO_CONTAINER_COUNTS[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
             run_block_io_experiment "$count" "$iter"
+            sleep 10
         done
     done
     
