@@ -20,9 +20,9 @@ set -e
 # =============================================================================
 
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
-CPU_CONTAINER_COUNTS=(4)
-NET_CONTAINER_COUNTS=(4)
-BIO_CONTAINER_COUNTS=(10)
+CPU_CONTAINER_COUNTS=(1 2 4)
+NET_CONTAINER_COUNTS=(1 2 4)
+BIO_CONTAINER_COUNTS=(1 5 10)
 
 # 반복 실험 횟수
 ITERATIONS=100
