@@ -19,15 +19,15 @@ set -e
 # =============================================================================
 
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
-CPU_CONTAINER_COUNTS=(1 5 10)
-NET_CONTAINER_COUNTS=(1 5 10)
-BIO_CONTAINER_COUNTS=(1 15 30)
+CPU_CONTAINER_COUNTS=(1 5 8)
+NET_CONTAINER_COUNTS=(1 5 8)
+BIO_CONTAINER_COUNTS=(1 8 15)
 
 # 반복 실험 횟수
 ITERATIONS=10
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
-TRACE_DURATION=120
+TRACE_DURATION=180
 
 # =============================================================================
 # Path Configuration
