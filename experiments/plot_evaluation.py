@@ -246,7 +246,7 @@ def fig_noise_source_identification(df_acc, output_dir, fmt="pdf"):
             nt_to_dominant_short[nt] = "bio"
 
     n_types = len(noise_types)
-    fig, axes = plt.subplots(1, n_types, figsize=(2.5 * n_types, 2.6),
+    fig, axes = plt.subplots(1, n_types, figsize=(2.5 * n_types, 1.8),
                              constrained_layout=True, sharey=True)
     if n_types == 1:
         axes = [axes]
