@@ -403,99 +403,114 @@ def fig_overhead_time(df_time, output_dir, fmt="pdf"):
 
 # ============================================================================
 # Figure 4: System Overhead — Resource Consumption
-# PureTime (eBPF Tracer + Loader) process CPU% and Memory MB over time
 # ============================================================================
 def fig_overhead_resource(df_res, output_dir, fmt="pdf"):
     """
-    Time series of PureTime process resource usage:
-      Left:  CPU usage (%) of PureTime process over experiment duration
-      Right: Memory usage (MB) of PureTime process over experiment duration
-    Per noise-type lines to show consistency across workloads.
+    1×3 horizontal layout spanning full 2-column paper width.
+    Each column = one noise type workload.
+    Left y-axis: CPU%. Right y-axis: Memory MB. Title = noise type.
     """
     print("\n[Figure 4] System Overhead — Resource Consumption (PureTime Process)")
 
-    if "timestamp" in df_res.columns:
-        df_res["timestamp"] = pd.to_numeric(df_res["timestamp"], errors="coerce")
-        df_res = df_res.sort_values("timestamp")
+    df = df_res.copy()
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
 
-    noise_types = sorted(df_res["resource_type"].unique())
+    noise_types = sorted(df["resource_type"].unique())
+    n = len(noise_types)
 
-    fig, axes = plt.subplots(1, 2, figsize=(7, 2.6), constrained_layout=True)
+    fig, axes = plt.subplots(1, n, figsize=(7.16, 2.4),
+                             constrained_layout=True)
+    if n == 1:
+        axes = [axes]
 
-    # --- Left: CPU usage of PureTime process ---
-    ax1 = axes[0]
-    if "cpu_percent" in df_res.columns:
-        for nt in noise_types:
-            label = get_label(nt)
-            color = get_color(nt)
-            sub = df_res[df_res["resource_type"] == nt]
+    C_CPU = "#2166ac"
+    C_MEM = "#b2182b"
 
-            if "iteration" in sub.columns and sub["iteration"].nunique() > 1:
-                grouped = sub.groupby("timestamp")["cpu_percent"].agg(["mean", "std"]).reset_index()
-                t = grouped["timestamp"] - grouped["timestamp"].min()
-                ax1.plot(t, grouped["mean"], "-", color=color, label=label, linewidth=1)
-                ax1.fill_between(t, grouped["mean"] - grouped["std"],
-                                 grouped["mean"] + grouped["std"],
-                                 alpha=0.15, color=color)
-            else:
-                t = sub["timestamp"] - sub["timestamp"].min()
-                ax1.plot(t, sub["cpu_percent"], "-", color=color,
-                         label=label, linewidth=1)
+    for i, nt in enumerate(noise_types):
+        ax = axes[i]
+        sub = df[df["resource_type"] == nt].copy()
+        if sub.empty:
+            continue
 
-        overall_cpu = df_res["cpu_percent"].mean()
-        ax1.axhline(y=overall_cpu, color="gray", linestyle="--",
-                    linewidth=0.8, alpha=0.5)
-        ax1.set_xlabel("Time (s)")
-        ax1.set_ylabel("PureTime CPU Usage (%)")
+        # ---- Aggregate per timestamp, use sequential index as x ----
+        sub = sub.sort_values("timestamp")
+        multi = "iteration" in sub.columns and sub["iteration"].nunique() > 1
 
-        # Show system ratio if available
-        if "cpu_ratio_system" in df_res.columns:
-            ratio = df_res["cpu_ratio_system"].mean()
-            ax1.text(0.95, 0.95,
-                     f"Avg: {overall_cpu:.2f}%\n({ratio:.2f}% of system)",
-                     transform=ax1.transAxes, ha="right", va="top",
-                     fontsize=7, fontweight="bold",
-                     bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
-                               edgecolor="gray", alpha=0.9))
+        if multi:
+            g = sub.groupby("timestamp").agg(
+                cpu_m=("cpu_percent", "mean"), cpu_s=("cpu_percent", "std"),
+                mem_m=("memory_mb", "mean"),   mem_s=("memory_mb", "std"),
+            ).reset_index()
+            g["cpu_s"] = g["cpu_s"].fillna(0)
+            g["mem_s"] = g["mem_s"].fillna(0)
+        else:
+            g = sub.rename(columns={"cpu_percent": "cpu_m", "memory_mb": "mem_m"})
+            g["cpu_s"] = 0.0
+            g["mem_s"] = 0.0
 
-        ax1.legend(fontsize=7, framealpha=0.9, edgecolor="gray", loc="upper left")
+        g = g.reset_index(drop=True)
+        t = g.index.values
 
-    # --- Right: Memory usage of PureTime process ---
-    ax2 = axes[1]
-    if "memory_mb" in df_res.columns:
-        for nt in noise_types:
-            label = get_label(nt)
-            color = get_color(nt)
-            sub = df_res[df_res["resource_type"] == nt]
+        # ---- CPU% (left y-axis) ----
+        ax.plot(t, g["cpu_m"], color=C_CPU, linewidth=0.8)
+        if multi:
+            ax.fill_between(t, g["cpu_m"] - g["cpu_s"], g["cpu_m"] + g["cpu_s"],
+                            color=C_CPU, alpha=0.15)
+        ax.set_ylim(0, 15)
+        ax.tick_params(axis="y", labelcolor=C_CPU, labelsize=6)
 
-            if "iteration" in sub.columns and sub["iteration"].nunique() > 1:
-                grouped = sub.groupby("timestamp")["memory_mb"].agg(["mean", "std"]).reset_index()
-                t = grouped["timestamp"] - grouped["timestamp"].min()
-                ax2.plot(t, grouped["mean"], "-", color=color, label=label, linewidth=1)
-                ax2.fill_between(t, grouped["mean"] - grouped["std"],
-                                 grouped["mean"] + grouped["std"],
-                                 alpha=0.15, color=color)
-            else:
-                t = sub["timestamp"] - sub["timestamp"].min()
-                ax2.plot(t, sub["memory_mb"], "-", color=color,
-                         label=label, linewidth=1)
+        # ---- Memory MB (right y-axis) ----
+        ax2 = ax.twinx()
+        ax2.plot(t, g["mem_m"], color=C_MEM, linewidth=0.8, linestyle="--")
+        if multi:
+            ax2.fill_between(t, g["mem_m"] - g["mem_s"], g["mem_m"] + g["mem_s"],
+                             color=C_MEM, alpha=0.10)
+        ax2.set_ylim(0, 1024)
+        ax2.tick_params(axis="y", labelcolor=C_MEM, labelsize=6)
 
-        overall_mem = df_res["memory_mb"].mean()
-        ax2.axhline(y=overall_mem, color="gray", linestyle="--",
-                    linewidth=0.8, alpha=0.5)
-        ax2.set_xlabel("Time (s)")
-        ax2.set_ylabel("PureTime Memory Usage (MB)")
+        # ---- Title = noise type ----
+        ax.set_title(get_label(nt), fontsize=9, fontweight="bold",
+                     color=get_color(nt))
 
-        if "mem_ratio_system" in df_res.columns:
-            ratio = df_res["mem_ratio_system"].mean()
-            ax2.text(0.95, 0.95,
-                     f"Avg: {overall_mem:.1f} MB\n({ratio:.2f}% of system)",
-                     transform=ax2.transAxes, ha="right", va="top",
-                     fontsize=7, fontweight="bold",
-                     bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
-                               edgecolor="gray", alpha=0.9))
+        # ---- x-axis ----
+        ax.set_xlim(-0.5, len(t) - 0.5)
+        ax.set_xlabel("Measurement Point", fontsize=7)
+        ax.tick_params(axis="x", labelsize=6)
 
-        ax2.legend(fontsize=7, framealpha=0.9, edgecolor="gray", loc="upper left")
+        # ---- y-axis labels only on edges ----
+        if i == 0:
+            ax.set_ylabel("CPU (%)", color=C_CPU, fontsize=7)
+        else:
+            ax.set_ylabel("")
+        if i == n - 1:
+            ax2.set_ylabel("Memory (MB)", color=C_MEM, fontsize=7)
+        else:
+            ax2.set_ylabel("")
+
+        # ---- Stats annotation (2-line, inside plot) ----
+        cpu_avg = g["cpu_m"].mean()
+        mem_avg = g["mem_m"].mean()
+        line1 = f"CPU: {cpu_avg:.2f}%"
+        line2 = f"Mem: {mem_avg:.1f} MB"
+        if "cpu_ratio_system" in sub.columns:
+            line1 += f" ({sub['cpu_ratio_system'].mean():.2f}%)"
+        if "mem_ratio_system" in sub.columns:
+            line2 += f" ({sub['mem_ratio_system'].mean():.2f}%)"
+        ax.text(0.97, 0.95, f"{line1}\n{line2}",
+                transform=ax.transAxes, ha="right", va="top", fontsize=5.5,
+                bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                          ec="gray", alpha=0.85))
+
+    # ---- Shared legend (bottom of first subplot) ----
+    from matplotlib.lines import Line2D
+    legend_items = [
+        Line2D([0], [0], color=C_CPU, linewidth=1.0, label="CPU (%)"),
+        Line2D([0], [0], color=C_MEM, linewidth=1.0, linestyle="--",
+               label="Memory (MB)"),
+    ]
+    axes[0].legend(handles=legend_items, fontsize=6, ncol=1,
+                   loc="lower left", framealpha=0.9, edgecolor="gray")
 
     return save_figure(fig, output_dir, "fig4_overhead_resource", fmt)
 
