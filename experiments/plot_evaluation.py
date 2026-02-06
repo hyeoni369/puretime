@@ -475,16 +475,16 @@ def fig_overhead_resource(df_res, output_dir, fmt="pdf"):
 
         # ---- x-axis ----
         ax.set_xlim(-0.5, len(t) - 0.5)
-        ax.set_xlabel("Measurement Point", fontsize=7)
+        ax.set_xlabel("Measurement Point", fontsize=10)
         ax.tick_params(axis="x", labelsize=6)
 
         # ---- y-axis labels only on edges ----
         if i == 0:
-            ax.set_ylabel("CPU (%)", color=C_CPU, fontsize=7)
+            ax.set_ylabel("CPU (%)", color=C_CPU, fontsize=10)
         else:
             ax.set_ylabel("")
         if i == n - 1:
-            ax2.set_ylabel("Memory (MB)", color=C_MEM, fontsize=7)
+            ax2.set_ylabel("Memory (MB)", color=C_MEM, fontsize=10)
         else:
             ax2.set_ylabel("")
 
@@ -498,7 +498,7 @@ def fig_overhead_resource(df_res, output_dir, fmt="pdf"):
         if "mem_ratio_system" in sub.columns:
             line2 += f" ({sub['mem_ratio_system'].mean():.2f}%)"
         ax.text(0.97, 0.95, f"{line1}\n{line2}",
-                transform=ax.transAxes, ha="right", va="top", fontsize=5.5,
+                transform=ax.transAxes, ha="right", va="top", fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.2", fc="white",
                           ec="gray", alpha=0.85))
 
