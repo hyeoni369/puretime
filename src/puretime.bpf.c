@@ -529,11 +529,13 @@ int BPF_PROG(handle_block_rq_issue, struct request *rq)
     return 0;
 }
 
-/* DISABLED (OPT-2): block_rq_complete is never consumed by the analyzer (it uses
- * only block_rq_insert + block_rq_issue) and is emitted without a cgroup filter,
- * making it the noisiest block hook. Disabled (not deleted) to cut block event
- * volume and reduce ring-buffer drop pressure. */
-#if 0
+/* block_rq_complete: consumed by the analyzer's device-queue wait model. A request's
+ * [issue, complete) is the time it occupies the device; when a victim's request lifetime
+ * overlaps a FOREIGN request's [issue, complete), the victim was waiting behind it at the
+ * device — in-scope wait that insert->issue (scheduler queue) alone misses. cgroup_id is
+ * read in IRQ/softirq context here (meaningless), but the analyzer matches completes to
+ * issues by request_addr and takes the cgroup from the issue, so this field is ignored
+ * downstream. Cost: ~1 extra event per request (block events are a minority of volume). */
 SEC("tp_btf/block_rq_complete")
 int BPF_PROG(handle_block_rq_complete, struct request *rq,
              blk_status_t error, unsigned int nr_bytes)
@@ -570,7 +572,6 @@ int BPF_PROG(handle_block_rq_complete, struct request *rq,
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
-#endif  /* DISABLED block_rq_complete (OPT-2) */
 
 /* ============================================================
  * Softirq Tracepoints

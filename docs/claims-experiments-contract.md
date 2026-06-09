@@ -47,8 +47,9 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 ### audit 반영 구현 현황 (2026-06-09, `audit` 브랜치 커밋됨)
 점검 → 분류 → 수정 완료분. (figure/CSV는 이 수정 반영 후 재생성 필요 — 미반영.)
 - **Analyzer 정확성**: wait union을 cgroup span `[first_ts,last_ts]`과 교집합(softirq_other 범위 밖 → 음수 makespan 버그 수정); 런타임 invariant assert; `trace_summary` trailer의 `dropped_events>0`이면 exit 2로 거부; CPU wait에 선행 슬라이스 계상(CPU-3, 핑퐁엔 효과~0·I/O wakeup 로버스트성).
+- **Block wait 2단 모델(BIO-2, 2026-06-10)**: ① insert→issue(스케줄러 큐 대기, CPU-3와 동일한 선행 슬라이스) + ② **issue→complete device-queue 대기**(내 요청 생애 `[insert,complete)`가 다른 cgroup의 `[issue,complete)`(장치 점유)와 겹친 구간 = 그 뒤에서 대기). request_addr 재사용 대비 FIFO 매칭, complete는 IRQ ctx라 cgroup_id 무시하고 issue의 cgroup 사용. **효과**: HDD 경합에서 제거효율 20~34% → **76~86%**(경합 강할수록↑). **과다제거 불가**: foreign이 장치에 없으면 device wait=0(SOLO에서 wait_bio=0 확인) + span clamp + invariant assert. 단위테스트 `test_block_device_queue_wait`.
 - **interval-merge ablation(C3/2-1) 코드 경로**: 양 분석기가 merge(`noise_free_makespan`) vs naive(union 없는 자원별 합, `noise_free_naive`, 음수 가능) 동시 출력 → 겹침비율 vs 오차 figure 데이터 준비됨. (실험 run·figure는 미실행.)
-- **Tracer/Loader**: block I/O를 bio→bi_blkg→blkcg로 귀속(writeback kworker도 컨테이너 귀속; io 위임 전제); `dropped_events` per-CPU 카운터 + loader trailer + drop 시 조기 중단; `net_dev_xmit`·`block_rq_complete` 비활성(#if 0, 미사용); `sched_event`에서 미사용 `comm`/`prev_comm` 제거(레코드 88→56B); enqueue cgroup walk 중복 제거.
+- **Tracer/Loader**: block I/O를 bio→bi_blkg→blkcg로 귀속(writeback kworker도 컨테이너 귀속; io 위임 전제); `dropped_events` per-CPU 카운터 + loader trailer + drop 시 조기 중단; `net_dev_xmit` 비활성(#if 0, 미사용); **`block_rq_complete`는 device-queue 대기(BIO-2)용으로 재활성**(요청당 ~1 이벤트 추가; block은 전체 볼륨의 소수); `sched_event`에서 미사용 `comm`/`prev_comm` 제거(레코드 88→56B); enqueue cgroup walk 중복 제거.
 - **버퍼**: ring buffer 512MB(고부하 기본; 오버헤드 측정만 32MB), json_writer 4MB.
 - **분석기 단일화**: `tests/`·`experiments/` 두 사본을 동일 로직으로 동기화(출력 형식만 다름: human/-j vs jq 배열). 변경 시 양쪽 동시.
 - **부하 실증(CPU)**: 무경합 오차 −0.05%(과잉제거 없음); register/L1-bound 경합에서 +2.6%·제거효율 99%(stress-ng 등 비-register stressor는 범위 밖 IPC dilation이 섞여 오차 과대). drop 감지·거부는 실오버플로(5975만 drop)로 end-to-end 확인.
@@ -120,6 +121,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **CPU 모델 = 단일코어 핀 측정 가정**: enqueue↔switch-in 사이 cross-CPU 마이그레이션 미추적(per-CPU wait). victim/stressor를 같은 코어에 핀해 가정 유지; 핀 없는 일반 배치는 측정 한계로 명시.
 - **호스트/커널 오버헤드 미제거**: co-tenant(컨테이너) 경합만 제거. root/system/커널스레드(cgroup≤1) 점유 CPU는 함수의 실제 비용으로 보존(제거 시 "실제보다 빠르다" 과장 방향이라 의도적). core 0 제외+조용한 노드로 영향 최소화.
 - **block 귀속 전제**: 컨테이너 cgroup에 io 컨트롤러 위임 필요(bio→bi_blkg→blkcg). 미위임 시 current-cgroup fallback → 버퍼드 writeback 미귀속 가능.
+- **on-device dilation 범위 밖(IPC dilation의 디스크판)**: HDD를 여러 writer가 *포화*시키면 헤드 seek thrashing으로 *각 요청 자체가 물리적으로 느려진다* — 이건 스케줄러블 대기가 아니라 장치 물리현상이라 PureTime이 못 뺀다. BIO-2(device-queue)는 "다른 cgroup이 장치 점유한 시간 뒤에서 대기"(스케줄러블)만 잡고, 내 요청의 seek dilation은 안 뺀다 → 그래서 포화 경합에선 잔여가 남는다(보수적). **noise는 "고갈"이 아니라 "wait를 유발하는 강도"여야 한다**(stressor 원칙). block victim은 CPU+IO 혼합(compression 등)으로 두고 디스크 포화는 피한다.
 - **ring buffer 유실 → trace 거부**: 불완전 trace엔 makespan 미산출(loader가 dropped_events 카운트·trailer 기록, analyzer가 exit 2로 거부). 고부하 실험은 ring buffer 상향(기본 512MB; 오버헤드 측정만 32MB).
 - **testbed = cgroup v2 컨테이너**: Knative 미배포. "함수 실행 환경 재현"으로 명시.
 

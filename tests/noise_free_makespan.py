@@ -14,7 +14,7 @@ Wait 계산 원칙 (모든 타입 동일):
 import argparse
 import json
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from bisect import bisect_left, bisect_right
 from typing import Dict, List, Optional, Set, Tuple
@@ -132,6 +132,10 @@ class NoiseFreeAnalyzer:
 
         # Block issue 히스토리 (Block I/O Wait 계산용) - (timestamp, event_dict) 튜플로 저장
         self.block_issue_history: List[Tuple[int, dict]] = []
+
+        # Block issue→complete 추적 (device-queue wait용). request_addr 재사용 대비 FIFO.
+        self.pending_block_issued: Dict[int, deque] = defaultdict(deque)  # addr -> FIFO of (issue_ts, cgroup)
+        self.block_lifetimes: List[Tuple[int, int, int]] = []  # (cgroup_id, issue_ts, complete_ts)
 
         # cgroup별 시간 범위
         self.cgroup_time_range: Dict[int, Tuple[int, int]] = {}
@@ -251,6 +255,8 @@ class NoiseFreeAnalyzer:
                 self._handle_block_insert(event, target_cgroups)
             elif event_type == 'block_rq_issue':
                 self._handle_block_issue(event, target_cgroups)
+            elif event_type == 'block_rq_complete':
+                self._handle_block_complete(event, target_cgroups)
 
             # Softirq 이벤트
             elif event_type == 'softirq_entry':
@@ -408,9 +414,26 @@ class NoiseFreeAnalyzer:
             'request_addr': req_addr
         }))
 
+        # issue→complete 매칭용 (device-queue wait). req_addr 재사용 대비 FIFO push.
+        # (insert_ts, issue_ts, cgroup) 저장 — insert 없으면 issue로 대체.
+        if req_addr is not None:
+            ins_ts = my_request.insert_timestamp_ns if my_request else timestamp
+            self.pending_block_issued[req_addr].append((ins_ts, timestamp, cgroup_id))
+
         # Softirq 구간 내 이벤트 기록
         cpu = event.get('cpu', 0)
         self._record_softirq_event(cgroup_id, cpu)
+
+    def _handle_block_complete(self, event: dict, target_cgroups: Set[int]):
+        """block_rq_complete: 요청의 장치 체류 구간 [issue, complete) 기록.
+        다른 cgroup 요청이 같은 시각 장치에 있었으면(device-queue wait) 나중에 귀속."""
+        req_addr = event.get('request_addr')
+        timestamp = event['timestamp_ns']
+        q = self.pending_block_issued.get(req_addr)
+        if q:
+            insert_ts, issue_ts, cg = q.popleft()
+            if timestamp > issue_ts:
+                self.block_lifetimes.append((cg, insert_ts, issue_ts, timestamp))
 
     def _handle_softirq_entry(self, event: dict, target_cgroups: Set[int]):
         """softirq_entry: CPU별로 softirq 시작 기록"""
@@ -466,6 +489,28 @@ class NoiseFreeAnalyzer:
 
     def _compute_results(self, target_cgroups: Set[int]) -> Dict[int, CgroupMakespanResult]:
         """결과 집계"""
+        # Device-queue wait: 내 요청이 살아있는 [insert, complete) 동안 다른 cgroup 요청이
+        # 장치에 있었으면(foreign [issue,complete) = 점유 중) 나는 그 뒤에서 대기한 것 →
+        # 겹치는 시간을 내 bio wait으로 귀속. insert→issue(스케줄러 큐)가 못 잡는 장치 대기 보완.
+        inflight: Dict[int, P.Interval] = defaultdict(P.empty)  # cgroup -> [issue,complete) union (장치 점유)
+        life: Dict[int, P.Interval] = defaultdict(P.empty)      # cgroup -> [insert,complete) union (요청 생애)
+        for cg, ins, iss, cmp in self.block_lifetimes:
+            if cmp > iss:
+                inflight[cg] |= P.closedopen(iss, cmp)
+            if cmp > ins:
+                life[cg] |= P.closedopen(ins, cmp)
+        for cgroup_id in target_cgroups:
+            mine = life.get(cgroup_id)
+            if not mine or mine.empty:
+                continue
+            foreign = P.empty()
+            for ocg, iv in inflight.items():
+                if ocg != cgroup_id:
+                    foreign |= iv
+            dev_wait = mine & foreign
+            if not dev_wait.empty:
+                self.cgroup_waits[cgroup_id].bio |= dev_wait
+
         results = {}
         for cgroup_id in tqdm(target_cgroups, desc="Computing results for cgroups"):
             waits = self.cgroup_waits[cgroup_id]
