@@ -86,6 +86,7 @@
   - with and without PureTime
 - PureTime 프로세스가 사용하는 CPU%, Memory 사용량 체크
 - 오버헤드는 **online(eBPF hook + Loader 캡처)만** 고려. Analyzer는 offline에 수행되는 task로 critical path에 존재하지 않으므로 리소스 사용량/지연에서 제외(본문 명시)
+- **Ring buffer 크기 주의**: 기본값은 고부하/경합 실험에서 드롭을 막으려고 **512MB**로 둔다(RSS ~1GB). 하지만 **이 오버헤드 측정에서는 RSS가 곧 측정 대상**이므로, `src/puretime.bpf.c`의 `events` 맵 `max_entries`를 **32MB로 내려서 빌드**한 뒤 측정한다(RSS ~70MB). 본문에는 측정에 쓴 크기를 명시. (드롭 발생 시 trailer의 `dropped_events>0` → 해당 run 무효, 크기 상향 후 재실행.)
 
 ### Figure
 

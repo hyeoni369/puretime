@@ -10,15 +10,17 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-/* Ring buffer for events - 32MB.
- * ~333ms backlog at a conservative 1M evt/s peak (>3x the 100ms poll period);
- * far more at realistic rates. Safe to shrink because the fast 4MB-buffered drain
- * keeps it emptied, and the dropped_events counter loudly rejects any overflow
- * instead of silently corrupting the trace. Reduces pinned RSS by ~448MB (libbpf
- * double-maps the data region) vs the old 256MB. Must stay a power of two. */
+/* Ring buffer for events - 512MB (high-load / contention-experiment default).
+ * Sized generously so heavy multi-container noise runs do not drop events (a
+ * dropped trace is rejected by the analyzer, which would waste the run). The
+ * dropped_events counter still backstops any overflow.
+ * NOTE: the ring buffer is the dominant RSS cost (libbpf double-maps the data
+ * region -> ~1GB RSS at 512MB). For the OVERHEAD measurement (experiment 4-1 /
+ * 실험 5) lower this to `32 * 1024 * 1024` (~70MB RSS) before building, since RSS
+ * is exactly what that experiment reports. Must stay a power of two. */
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 32 * 1024 * 1024);
+    __uint(max_entries, 512 * 1024 * 1024);
 } events SEC(".maps");
 
 /* Hash map to track socket -> cgroup_id mapping

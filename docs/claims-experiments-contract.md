@@ -96,7 +96,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **증명**: PureTime online 비용이 (A)지연·(B)자원 둘 다에서 현실적 워크로드에 acceptable.
 - **victim**: 그룹1·1-3 재사용. 이벤트 적음(float)~많음(video/net) 다 포함 — (A) 측정 신뢰성(신호 큰 함수일수록 오버헤드 측정 쉬움)·(B) 자원 스펙트럼.
 - **(A) 지연**: w/ vs w/o PureTime, 같은 함수·입력, **조용한 환경**, K=50+ 반복해 분포 비교 + 2-표본 검정 + 차이 신뢰구간. (조용한 환경+반복으로 신호를 노이즈 위로 — HPDC 음수 원인 직접 교정.)
-- **(B) 자원**: Tracer+Loader **CPU%·RSS·256MB ring buffer·JSONL I/O** 절대 프로파일링(빼기 아님).
+- **(B) 자원**: Tracer+Loader **CPU%·RSS·ring buffer·JSONL I/O** 절대 프로파일링(빼기 아님). RSS는 ring buffer가 지배적(libbpf 이중 매핑). 기본값 **512MB**(고부하 실험 안전)는 RSS ~1GB → **오버헤드 측정 시 `events` 맵 max_entries를 32MB로 내려 빌드**(RSS ~70MB). 보고에 사용 크기 명시.
 - **online만**: eBPF hook + Loader 캡처만. **Analyzer는 offline task로 critical path에 없으므로 리소스 사용량/지연에서 제외(본문 명시).** softirq 필터링 이미 적용.
 - **운영점 주장**: 본문 수치는 현실적 워크로드 = **표준 벤치마크(FunctionBench/SeBS) 기본 입력**(별도 trace 인용 대신 표준 기본값이 곧 현실 운영점).
 - **그림**: 함수별 w/ vs w/o 실행시간 box plot + 차이%·CI; 자원 사용량은 본문/Table(online/offline 분리). 곡선 없음.
