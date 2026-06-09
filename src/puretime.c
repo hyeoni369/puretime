@@ -150,13 +150,11 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         const struct sched_event *e = data;
         json_writer_add_int32(jw, "pid", e->pid);
         json_writer_add_int32(jw, "tid", e->tid);
-        json_writer_add_string(jw, "comm", e->comm);
 
         if (hdr->event_type == EVENT_SCHED_SWITCH) {
             json_writer_add_uint64(jw, "prev_cgroup_id", e->prev_cgroup_id);
             json_writer_add_int32(jw, "prev_pid", e->prev_pid);
             json_writer_add_int32(jw, "prev_tid", e->prev_tid);
-            json_writer_add_string(jw, "prev_comm", e->prev_comm);
         }
     } else if (hdr->event_type >= EVENT_NET_DEV_QUEUE &&
                hdr->event_type <= EVENT_NET_DEV_XMIT) {
@@ -236,8 +234,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Initialize JSON writer with batching (4KB buffer) */
-    jw = json_writer_create(env.output_path, 4096);
+    /* Initialize JSON writer with batching (4MB buffer).
+     * Large buffer amortizes write() syscalls on the single-threaded drain path
+     * so the ring buffer stays drained and does not drop under high event rates. */
+    jw = json_writer_create(env.output_path, 4 * 1024 * 1024);
     if (!jw) {
         fprintf(stderr, "Failed to create JSON writer for %s: %s\n",
                 env.output_path, strerror(errno));

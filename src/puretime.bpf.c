@@ -10,10 +10,15 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-/* Ring buffer for events - 256MB */
+/* Ring buffer for events - 32MB.
+ * ~333ms backlog at a conservative 1M evt/s peak (>3x the 100ms poll period);
+ * far more at realistic rates. Safe to shrink because the fast 4MB-buffered drain
+ * keeps it emptied, and the dropped_events counter loudly rejects any overflow
+ * instead of silently corrupting the trace. Reduces pinned RSS by ~448MB (libbpf
+ * double-maps the data region) vs the old 256MB. Must stay a power of two. */
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024 * 1024);
+    __uint(max_entries, 32 * 1024 * 1024);
 } events SEC(".maps");
 
 /* Hash map to track socket -> cgroup_id mapping
@@ -133,20 +138,18 @@ int BPF_PROG(handle_enqueue_task, struct rq *rq, struct task_struct *p, int flag
     }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
-    e->hdr.cgroup_id = get_task_cgroup_id(p);
+    e->hdr.cgroup_id = cgroup_id;  /* reuse cached value (OPT-3: avoid 2nd cgroup walk) */
     e->hdr.cpu = bpf_get_smp_processor_id();
     e->hdr.event_type = EVENT_SCHED_ENQUEUE;
 
     e->pid = BPF_CORE_READ(p, tgid);
     e->tid = BPF_CORE_READ(p, pid);
-    bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm), BPF_CORE_READ(p, comm));
     e->is_switch_in = 0;
 
     /* Clear prev fields (not used for enqueue) */
     e->prev_cgroup_id = 0;
     e->prev_pid = 0;
     e->prev_tid = 0;
-    __builtin_memset(e->prev_comm, 0, sizeof(e->prev_comm));
 
     bpf_ringbuf_submit(e, 0);
     return 0;
@@ -179,14 +182,11 @@ int BPF_PROG(handle_sched_switch, bool preempt,
 
         e->pid = BPF_CORE_READ(prev, tgid);
         e->tid = BPF_CORE_READ(prev, pid);
-        bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm),
-                                    BPF_CORE_READ(prev, comm));
         e->is_switch_in = 0;
 
         e->prev_cgroup_id = 0;
         e->prev_pid = 0;
         e->prev_tid = 0;
-        __builtin_memset(e->prev_comm, 0, sizeof(e->prev_comm));
 
         bpf_ringbuf_submit(e, 0);
     }
@@ -206,14 +206,12 @@ int BPF_PROG(handle_sched_switch, bool preempt,
     /* Next task (switching in) */
     e->pid = BPF_CORE_READ(next, tgid);
     e->tid = BPF_CORE_READ(next, pid);
-    bpf_probe_read_kernel_str(&e->comm, sizeof(e->comm), BPF_CORE_READ(next, comm));
     e->is_switch_in = 1;
 
     /* Previous task (switching out) */
     e->prev_cgroup_id = get_task_cgroup_id(prev);
     e->prev_pid = BPF_CORE_READ(prev, tgid);
     e->prev_tid = BPF_CORE_READ(prev, pid);
-    bpf_probe_read_kernel_str(&e->prev_comm, sizeof(e->prev_comm), BPF_CORE_READ(prev, comm));
 
     bpf_ringbuf_submit(e, 0);
     

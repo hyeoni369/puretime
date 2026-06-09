@@ -36,19 +36,20 @@ struct event_header {
     __u32 event_type;        /* enum event_type */
 };
 
-/* Scheduler events: wakeup, wakeup_new, switch */
+/* Scheduler events: wakeup, wakeup_new, switch.
+ * comm/prev_comm intentionally omitted (OPT-4): the makespan analyzer keys on tid,
+ * not comm, so capturing it cost a per-event string read + JSON escape on the two
+ * hottest hooks for nothing. Dropping it shrinks this record 88 -> 56 bytes. */
 struct sched_event {
     struct event_header hdr;
     __s32 pid;               /* Process ID (tgid) */
     __s32 tid;               /* Thread ID (pid in kernel terms) */
-    char comm[TASK_COMM_LEN];
     __u8 is_switch_in;       /* 1 = switched in, 0 = switched out */
-    __u8 reserved[7];        /* Alignment padding */
+    __u8 reserved[7];        /* Alignment padding (keeps prev_cgroup_id 8-aligned) */
     /* For sched_switch only: prev process info */
     __u64 prev_cgroup_id;    /* cgroup ID of prev process */
     __s32 prev_pid;
     __s32 prev_tid;
-    char prev_comm[TASK_COMM_LEN];
 };
 
 /* Network TX events */

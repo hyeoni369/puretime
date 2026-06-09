@@ -151,9 +151,9 @@ class PureTimeAnalyzer:
                 self.runq_latency.add(latency)
                 self.correlated_sched += 1
 
-                # Per-process tracking
-                comm = event.get('comm', 'unknown')
-                self.per_process_runq[comm].add(latency)
+                # Per-thread tracking (comm no longer emitted; group by tid)
+                tid_key = event.get('tid', 'unknown')
+                self.per_process_runq[tid_key].add(latency)
         else:
             self.uncorrelated_sched += 1
 
@@ -323,14 +323,14 @@ class PureTimeAnalyzer:
 
         # Top processes by run queue latency
         if self.per_process_runq:
-            print("\n[Top 10 Processes by Run Queue Latency (P99)]")
+            print("\n[Top 10 Threads (tid) by Run Queue Latency (P99)]")
             sorted_procs = sorted(
                 self.per_process_runq.items(),
                 key=lambda x: x[1].p99_ns,
                 reverse=True
             )[:10]
-            for comm, stats in sorted_procs:
-                print(f"  {comm}: P99={stats.p99_ns/1000:.2f}us, "
+            for tid_key, stats in sorted_procs:
+                print(f"  tid {tid_key}: P99={stats.p99_ns/1000:.2f}us, "
                       f"avg={stats.avg_ns/1000:.2f}us, n={stats.count}")
 
         print("\n" + "=" * 70)
