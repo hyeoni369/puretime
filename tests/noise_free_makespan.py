@@ -108,6 +108,9 @@ class NoiseFreeAnalyzer:
     def __init__(self, min_events: int = 100):
         self.min_events = min_events
 
+        # Ring buffer 유실 카운트 (loader가 기록한 trace_summary trailer에서 읽음)
+        self.dropped_events: int = 0
+
         # Pending 이벤트 추적
         self.pending_enqueues: Dict[int, PendingEnqueue] = {}  # tid -> PendingEnqueue
         self.pending_packets: Dict[int, PendingPacket] = {}  # skb_addr -> PendingPacket
@@ -138,6 +141,15 @@ class NoiseFreeAnalyzer:
         """
         # Pass 1: cgroup 자동 감지 및 시간 범위 수집
         cgroup_counts = self._detect_cgroups(filepath)
+
+        # 불완전 trace 거부: ring buffer 유실이 있으면 makespan 계산을 하지 않는다.
+        # (실시간 보정이 아니라, 더 큰 ring buffer로 재실행해야 한다는 신호)
+        if self.dropped_events > 0:
+            raise ValueError(
+                f"Incomplete trace: {self.dropped_events} ring-buffer events were dropped "
+                f"(buffer full). Re-run the tracer with a larger ring buffer; "
+                f"makespan will NOT be computed on a lossy trace."
+            )
 
         if target_cgroups is None:
             # 자동 감지 모드
@@ -170,6 +182,11 @@ class NoiseFreeAnalyzer:
                 except json.JSONDecodeError:
                     continue
 
+                # Loader가 마지막에 기록하는 유실 요약 trailer
+                if event.get('event') == 'trace_summary':
+                    self.dropped_events += int(event.get('dropped_events', 0))
+                    continue
+
                 cgroup_id = event.get('cgroup_id', 0)
                 timestamp = event.get('timestamp_ns', 0)
 
@@ -198,9 +215,13 @@ class NoiseFreeAnalyzer:
                 if not line.strip():
                     continue
                 try:
-                    events.append(json.loads(line))
+                    event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # trace_summary trailer는 Pass 1에서 이미 처리됨
+                if event.get('event') == 'trace_summary':
+                    continue
+                events.append(event)
 
         # 2. timestamp 기준 정렬 (Multi-CPU 환경에서 순서 보장)
         events.sort(key=lambda e: e.get('timestamp_ns', 0))
@@ -431,19 +452,41 @@ class NoiseFreeAnalyzer:
             first_ts, last_ts = self.cgroup_time_range.get(cgroup_id, (0, 0))
 
             original_makespan = last_ts - first_ts
-            all_wait = waits.total_unique_wait()
+
+            # Wait 구간을 이 cgroup의 생존 구간 [first_ts, last_ts]와 교집합한다.
+            # softirq_other는 softirq 창의 timestamp로 만들어져 이 cgroup 범위 밖에
+            # 놓일 수 있으므로, span 밖 부분을 잘라내야 과다차감(음수 makespan)을 막는다.
+            span = P.closedopen(first_ts, last_ts)
+            all_wait = waits.total_unique_wait() & span
             unique_wait = interval_sum(all_wait)
+
+            wait_cpu = interval_sum(waits.cpu & span)
+            wait_net = interval_sum(waits.net & span)
+            wait_bio = interval_sum(waits.bio & span)
+            softirq_other = interval_sum(waits.softirq_other & span)
+            softirq_self = interval_sum(waits.softirq_self & span)
+
+            noise_free_makespan = original_makespan - unique_wait
+
+            # Invariant 가드 (contract 명시): 위반 시 조용히 틀린 값을 내지 말고 즉시 실패.
+            assert original_makespan >= 0, (cgroup_id, original_makespan)
+            assert 0 <= unique_wait <= original_makespan, \
+                (cgroup_id, unique_wait, original_makespan)
+            assert 0 <= noise_free_makespan <= original_makespan, \
+                (cgroup_id, noise_free_makespan, original_makespan)
+            assert min(wait_cpu, wait_net, wait_bio, softirq_other, softirq_self) >= 0, \
+                (cgroup_id, wait_cpu, wait_net, wait_bio, softirq_other, softirq_self)
 
             results[cgroup_id] = CgroupMakespanResult(
                 cgroup_id=cgroup_id,
                 original_makespan=original_makespan,
-                noise_free_makespan=original_makespan - unique_wait,
+                noise_free_makespan=noise_free_makespan,
                 total_unique_wait=unique_wait,
-                wait_cpu=interval_sum(waits.cpu),
-                wait_net=interval_sum(waits.net),
-                wait_bio=interval_sum(waits.bio),
-                softirq_other=interval_sum(waits.softirq_other),
-                softirq_self=interval_sum(waits.softirq_self),
+                wait_cpu=wait_cpu,
+                wait_net=wait_net,
+                wait_bio=wait_bio,
+                softirq_other=softirq_other,
+                softirq_self=softirq_self,
             )
         return results
 
@@ -540,7 +583,12 @@ def main():
         target_cgroups = load_cgroups_from_file(args.cgroups_file)
 
     analyzer = NoiseFreeAnalyzer(min_events=args.min_events)
-    results = analyzer.analyze_file(args.trace_file, target_cgroups)
+    try:
+        results = analyzer.analyze_file(args.trace_file, target_cgroups)
+    except ValueError as e:
+        # 불완전 trace 등 거부 사유 → 조용히 결과를 내지 않고 명확히 실패
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
 
     # 경고: 파일에 있지만 트레이스에서 결과가 없는 cgroup
     if target_cgroups:
