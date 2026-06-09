@@ -52,6 +52,8 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **버퍼**: ring buffer 512MB(고부하 기본; 오버헤드 측정만 32MB), json_writer 4MB.
 - **분석기 단일화**: `tests/`·`experiments/` 두 사본을 동일 로직으로 동기화(출력 형식만 다름: human/-j vs jq 배열). 변경 시 양쪽 동시.
 - **부하 실증(CPU)**: 무경합 오차 −0.05%(과잉제거 없음); register/L1-bound 경합에서 +2.6%·제거효율 99%(stress-ng 등 비-register stressor는 범위 밖 IPC dilation이 섞여 오차 과대). drop 감지·거부는 실오버플로(5975만 drop)로 end-to-end 확인.
+- **E2E 3자원 검증(2026-06-10)**: 현재 코드로 실측 — **CPU** 동일코어 핀+register/L1 경합 removal **99%**(잔여 +0.5%); **Network** HTB 10mbit throttle count=4 removal **73%**(커밋 75%); **Block** 약한 regime real-compression count=5 removal **68%**(커밋 60~76%). 셋 다 **과다제거 없음**(noise_free ≥ solo). 모두 보수적.
+- **BIO-2(device-queue) 폐기 — 재시도 금지**: block을 issue→complete(`[insert,complete) ∩ foreign 장치점유`)로 끌어올려 76~86%를 봤으나, E2E 검증에서 **과다제거**(noise_free가 solo보다 22% 아래, removal 107%) 확인 → `git revert`(13a3207→31ce1b9). 원인: **단일서버(HDD 헤드 1개)에서 "foreign in-flight ≠ 내가 대기"** (foreign이 내 뒤에 큐잉됐을 수 있어 이중계상). NVMe는 병렬이라 더 심함. 향후 누가 device-queue를 다시 켜려면 이 과다제거부터 해결해야 함. 현재 block = sound한 insert→issue(선행 슬라이스) 단독.
 
 ## 확정 실험 프로토콜 (locked · 2026-06-09 · 전 P0)
 > **공통 testbed**: **cgroup v2 격리 컨테이너로 서버리스 함수 실행 환경 재현** — Knative 미배포(측정에 필요한 건 cgroup 격리이며 모든 컨테이너 기반 서버리스의 공통 기반. 논문에 그렇게 명시). 컨테이너는 cgroup v2 별도 할당 + CPU/메모리 제한 + 단일 요청 처리.
@@ -120,6 +122,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **CPU 모델 = 단일코어 핀 측정 가정**: enqueue↔switch-in 사이 cross-CPU 마이그레이션 미추적(per-CPU wait). victim/stressor를 같은 코어에 핀해 가정 유지; 핀 없는 일반 배치는 측정 한계로 명시.
 - **호스트/커널 오버헤드 미제거**: co-tenant(컨테이너) 경합만 제거. root/system/커널스레드(cgroup≤1) 점유 CPU는 함수의 실제 비용으로 보존(제거 시 "실제보다 빠르다" 과장 방향이라 의도적). core 0 제외+조용한 노드로 영향 최소화.
 - **block 귀속 전제**: 컨테이너 cgroup에 io 컨트롤러 위임 필요(bio→bi_blkg→blkcg). 미위임 시 current-cgroup fallback → 버퍼드 writeback 미귀속 가능.
+- **on-device dilation 범위 밖(IPC dilation의 디스크판)**: HDD를 여러 writer가 *포화*시키면 헤드 seek thrashing으로 *각 요청 자체가 물리적으로 느려진다* — 스케줄러블 대기가 아니라 장치 물리현상이라 못 뺀다. 그래서 block은 **포화 regime에서 제거효율이 ~34%로 떨어지고**, 약한(wait-유발) regime에선 60~76%(보수적). **block noise는 "고갈"이 아니라 "wait 유발" 강도여야 한다** — victim은 CPU+IO 혼합(compression)으로 두고 디스크 포화는 피한다. (issue→complete device-queue로 포화에서도 잡으려 했으나 단일서버에서 "foreign in-flight≠내 대기"라 과다제거 → 폐기, 아래 BIO-2 참조.)
 - **ring buffer 유실 → trace 거부**: 불완전 trace엔 makespan 미산출(loader가 dropped_events 카운트·trailer 기록, analyzer가 exit 2로 거부). 고부하 실험은 ring buffer 상향(기본 512MB; 오버헤드 측정만 32MB).
 - **testbed = cgroup v2 컨테이너**: Knative 미배포. "함수 실행 환경 재현"으로 명시.
 
