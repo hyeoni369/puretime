@@ -36,7 +36,7 @@ docker run -d \
 
 ##### 버킷 생성 (웹 콘솔)
 - http://<서버IP>:9001 접속
-- minioadmin / minioadmin 로그인
+- minioadmincslab / minioadmincslab 로그인
 - Buckets → Create Bucket → uploads 생성
 
 ### **1. Clone your new repository**
