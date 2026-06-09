@@ -38,8 +38,8 @@ def main():
     # Configuration from environment
     input_file = os.environ.get('INPUT_FILE', '/data/tmp.bin')
     minio_endpoint = os.environ.get('MINIO_ENDPOINT', 'http://165.194.27.225:9000')
-    minio_access_key = os.environ.get('MINIO_ACCESS_KEY', 'minioadmin')
-    minio_secret_key = os.environ.get('MINIO_SECRET_KEY', 'minioadmin')
+    minio_access_key = os.environ.get('MINIO_ACCESS_KEY', 'minioadmincslab')
+    minio_secret_key = os.environ.get('MINIO_SECRET_KEY', 'minioadmincslab')
     bucket_name = os.environ.get('MINIO_BUCKET', 'uploads')
     iterations = int(os.environ.get('ITERATIONS', '5'))
 
