@@ -69,6 +69,10 @@ class CgroupMakespanResult:
     wait_bio: int
     softirq_other: int
     softirq_self: int
+    # Interval-merge ablation (C3): naive = sum of per-resource waits WITHOUT union,
+    # so overlapping waits are double-subtracted. noise_free_naive can go negative.
+    naive_total_wait: int = 0
+    noise_free_naive: int = 0
 
 
 # Pending 이벤트: 시작은 됐지만 아직 완료되지 않은 이벤트
@@ -468,6 +472,13 @@ class NoiseFreeAnalyzer:
 
             noise_free_makespan = original_makespan - unique_wait
 
+            # Interval-merge ablation (C3 / exp 2-1): naive subtraction sums per-resource
+            # waits WITHOUT the union, so overlapping waits are removed more than once.
+            # This over-subtracts and can drive noise_free_naive negative -- the merge's
+            # advantage. (NOT asserted: negative is the expected failure mode here.)
+            naive_total_wait = wait_cpu + wait_net + wait_bio + softirq_other
+            noise_free_naive = original_makespan - naive_total_wait
+
             # Invariant 가드 (contract 명시): 위반 시 조용히 틀린 값을 내지 말고 즉시 실패.
             assert original_makespan >= 0, (cgroup_id, original_makespan)
             assert 0 <= unique_wait <= original_makespan, \
@@ -487,6 +498,8 @@ class NoiseFreeAnalyzer:
                 wait_bio=wait_bio,
                 softirq_other=softirq_other,
                 softirq_self=softirq_self,
+                naive_total_wait=naive_total_wait,
+                noise_free_naive=noise_free_naive,
             )
         return results
 
@@ -520,6 +533,10 @@ def print_results(results: Dict[int, CgroupMakespanResult], output_json: bool = 
                 'softirq_self_ns': result.softirq_self,
                 'wait_percentage': (result.total_unique_wait / result.original_makespan * 100)
                     if result.original_makespan > 0 else 0,
+                # Interval-merge ablation (C3): merged vs naive (no-union) subtraction
+                'naive_total_wait_ns': result.naive_total_wait,
+                'noise_free_naive_ns': result.noise_free_naive,
+                'overlap_removed_ns': result.naive_total_wait - result.total_unique_wait,
             })
         print(json.dumps(output, indent=2))
     else:

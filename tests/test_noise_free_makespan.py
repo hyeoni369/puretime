@@ -115,6 +115,45 @@ def test_zero_drops_trailer_ok():
     print("ok: dropped_events=0 trailer accepted")
 
 
+def test_interval_merge_beats_naive_subtraction():
+    """C3 ablation: when CPU and block waits OVERLAP in time, the merged union
+    removes the overlap once, while naive per-resource subtraction double-removes it
+    (and can drive noise_free negative). Proves the interval-merge advantage."""
+    trace = [
+        # victim cgroup 100, span [1000,1500] (makespan 500)
+        # --- CPU wait [1100,1500): victim enqueued@1000, cg200 stole CPU@1100, victim ran@1500
+        {"event": "sched_enqueue", "timestamp_ns": 1000, "cgroup_id": 100, "cpu": 0, "tid": 1},
+        {"event": "sched_switch",  "timestamp_ns": 1100, "cgroup_id": 200, "cpu": 0, "tid": 2,
+         "prev_cgroup_id": 100, "prev_pid": 1, "prev_tid": 1},
+        {"event": "sched_switch",  "timestamp_ns": 1500, "cgroup_id": 100, "cpu": 0, "tid": 1,
+         "prev_cgroup_id": 200, "prev_pid": 2, "prev_tid": 2},
+        # --- BLOCK wait [1200,1500): victim insert@1050, cg200 issued@1200, victim issued@1500
+        {"event": "block_rq_insert", "timestamp_ns": 1050, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "R"},
+        {"event": "block_rq_issue",  "timestamp_ns": 1200, "cgroup_id": 200, "cpu": 0, "request_addr": 2, "rwbs": "R"},
+        {"event": "block_rq_issue",  "timestamp_ns": 1500, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "R"},
+    ]
+    path = _write(trace)
+    try:
+        res = NoiseFreeAnalyzer(min_events=1).analyze_file(path, target_cgroups={100})
+    finally:
+        os.unlink(path)
+    r = res[100]
+    # cpu wait [1100,1500)=400, bio wait [1200,1500)=300; they overlap on [1200,1500)
+    assert r.wait_cpu == 400, r.wait_cpu
+    assert r.wait_bio == 300, r.wait_bio
+    # merged union [1100,1500) = 400 (overlap removed once)
+    assert r.total_unique_wait == 400, r.total_unique_wait
+    # naive sum = 400+300 = 700 (overlap double-counted)
+    assert r.naive_total_wait == 700, r.naive_total_wait
+    assert r.naive_total_wait > r.total_unique_wait
+    # merged makespan valid (500-400=100); naive over-removes to an impossible negative (500-700=-200)
+    assert r.noise_free_makespan == 100, r.noise_free_makespan
+    assert r.noise_free_naive == -200, r.noise_free_naive
+    assert r.noise_free_naive < 0 < r.noise_free_makespan
+    print(f"ok: merge vs naive — merged noise_free={r.noise_free_makespan} (valid), "
+          f"naive={r.noise_free_naive} (over-removed, negative); overlap removed once")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
