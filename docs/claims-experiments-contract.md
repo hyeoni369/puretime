@@ -1,0 +1,118 @@
+# PureTime — Claims ↔ Experiments Contract
+
+> 글쓰기 채팅과 실험 채팅의 **단일 진실(single source of truth)**.
+> 결과가 나올 때마다 이 표를 갱신하고, 양쪽 채팅이 이 표를 기준으로 움직인다.
+> 프로젝트 지식에 올려두고 주기적으로 갱신하거나, 각 채팅 시작 시 붙여넣어 사용.
+> 최종 갱신: 2026-06-09 (**전 P0 설계 확정** · 그룹5 case study → 3-2 흡수 · 4-1 재설계 · testbed = cgroup v2 컨테이너 · 구현 순서·TDD 층 노트 추가)
+
+## Thesis (one sentence)
+PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·network·block I/O·softirq의 contention-induced wait를 커널 이벤트에서 추적하고 co-tenant cgroup 활동과 상관시켜 노이즈를 분리한 뒤, interval merge로 겹치는 wait를 중복 없이 제거하여 per-invocation noise-free makespan을 산출하는 최초의 reference-free 시스템이다.
+
+## 논문 contribution 문장으로의 압축 (SoCC 관례: 보통 3개)
+아래 표의 10개 claim은 *검증 단위*다. 논문 contribution 리스트에서는 셋으로 묶어 제시 권장:
+1. **정확한 다자원 noise-free 측정** — 네 자원의 contention wait를 커널에서 직접 측정, cross-tenant attribution + interval merge로 중복 없이 순수 시간 복원 (= C1·C2·C3·C4).
+2. **Reference-free·input-invariant 측정** — 단일 호출 안에서 완결, input 변동에 불변, 통계 표본 불필요 (= C5·C6).
+3. **실용성** — 저오버헤드 + 실제 결정(디버깅·벤치마킹·autoscaling)을 바꾸는 신호 (= C7·C8·C9·C10).
+
+## 상태 범례
+`계획` 설계 전 · `설계` 프로토콜 확정 · `진행` 수집 중 · `데이터` 일부 결과 있음(보강 필요) · `완료` 그림/표 확정
+우선순위: **P0** resubmission 필수 · **P1** 강력 권장 · **P2** stretch/future-work
+
+## Contract
+
+| ID | Claim (falsifiable) | 검증 실험 | 리뷰 대응 | 우선 | 상태 | 결과/메모 |
+|----|---------------------|-----------|-----------|------|------|-----------|
+| C1 | noise-free makespan이 solo 기준(GT) 대비 오차 E% 이내 | 1-1, 1-2, 1-4 | core | **P0** | **설계** | 그룹1 단일-노이즈 **한 세트**에서 1-1·1-2·1-4 동시 추출. victim 4종, K=50, solo 분포 GT, 분포+오차막대. 단일 사례 96.25%(0.6s 잔여)는 보강 대상 |
+| C2 | 네 자원 각각의 wait를 정확히 분류·귀속 (breakdown ↔ 주입 유형 일치) | 1-2 | — | P1 | **설계** | 그룹1 세트에서 추출. 자원 전용 victim이면 주입↔귀속 1:1로 깨끗. 1-3 스택바와 연계 |
+| C3 | 자원 간 wait가 겹쳐도 중복 없이 제거 — 단순 역산 대비 과다차감 회피 | 1-3, 2-1 | C4 | **P0** | **설계** | 1-3(victim=video_processing, 단일스레드)에서 쌍+셋 조합 → 2-1에서 merge vs 단순역산. 겹침 비율을 x축으로 과다차감 정량화. **novelty 핵심** |
+| C4 | self/neighbor 구분으로 정당한 self 대기는 보존, neighbor 노이즈만 제거 | 2-2 | — | P1 | 계획 | 분류 제거 시 결과 유의 변화 보여야 (미설계) |
+| C5 | input(작업량) 변동 하에서 intrinsic 변동은 보존, extrinsic 노이즈만 제거 (solo와 상관) | 3-1 | 3단계 논거 | **P0** | **설계** | victim 둘: float(입력 크기) + detect+sentiment(입력 내용·얼굴 수 0·1·5·10·15·30). 둘 다 CPU-only register/L1 가변 stressor(IPC dilation 누수 차단). K=50, solo 분포 GT. **최우선 신규** |
+| C6 | 단일 호출로 통계 표본 없이 신뢰성 있는 순수 시간 | 3-2 | C8 | **P0** | **설계** | 단일실행 vs 통계(median·P90·raw wall). 3-1 데이터 재사용(셔플해 시계열화), K=50=표본 N. **+ 결정 대조(5-1·5-2 흡수)**: CloudWatch 2σ 밴드·KPA 70 target counterfactual |
+| C7 | 트레이싱 추가 지연·자원 비용이 낮음 | 4-1 | C6 | **P0** | **설계** | **재설계**: (A)지연 w/vs w/o 조용한 환경 분포+검정+CI, (B)자원 CPU·RSS·256MB·JSONL. online만(Analyzer offline=critical path 밖, 제외). HPDC "더 빠름" 음수 논란 해소 |
+| C8 | 출력이 코드 회귀 vs 환경 노이즈를 구분 (false alarm 없음, 분산↓로 카나리 가속) | 3-2 (흡수) | C9 | P1 | **설계** | 3-2 결정 대조에 흡수. CloudWatch mean±2σ → 노이즈 낀 wall은 false alarm, 순수 시간은 정상. 별도 실험 삭제 |
+| C9 | 노이즈로 인한 가짜 concurrency 증가를 걸러 over-provisioning 회피 신호 | 3-2 (흡수) | C9 | P1 | **설계** | 3-2 결정 대조에 흡수. KPA target 70/pod → wall은 over-provision, 순수 시간은 scale 안 함. counterfactual, 온라인은 future work |
+| C10 | 실제 워크로드(FunctionBench 등)·명시된 하드웨어에서 성립 | 6-1, 6-2 | C3 | P1/P2 | 계획 | 1-3·그룹1에서 이미 FunctionBench/SeBS victim + cgroup v2 container 명세 사용 → 6-1 일부 자동 충족. 6-2(실제 co-tenant) P2 |
+
+> **그룹5(case study) 5-1·5-2는 3-2에 흡수, 별도 실험 삭제.** 결정 로직은 측정값 + 실제 기본 임계값으로 *서술*(폐루프 미구동, future work).
+> **실험 상세 설계는 별도 문서 `puretime-experiment-design-final.md` 참조.** (이 표는 추적용, 그 문서는 방법·figure·victim 확정 설계.)
+
+## 구현 순서·검증 방법 (ClaudeCode)
+- **순서**: eBPF 측정기(Tracer/Loader) + Analyzer를 *먼저* 완성 → victim·하니스·집계는 그다음. 측정·계산 코어가 맞아야 나머지가 의미 있음.
+- **착수는 점검부터**: 기존 구현이 정확한지 + 효과 큰 최적화 여지 있는지 audit 먼저(Plan Mode + 읽기 전용 auditor subagent, "정확성 영향만, 스타일 지적 금지"). **점검 → 사람 분류 → 수정, 세 단계 분리**(한 번에 고치게 하지 말 것).
+- **TDD는 층마다 다름**:
+  - Analyzer(interval merge·attribution)·집계·통계 = **TDD 됨**(순수 함수). 가짜 JSONL + 손계산 정답으로 테스트 먼저. novelty 핵심이라 여기가 제일 중요.
+  - eBPF 캡처(Tracer hook) = **TDD 아님 → validation**. 무부하→wait~0, 단일 자원 부하→해당 자원 이벤트만. + 실험 1·2·3의 solo 대조가 곧 eBPF 정확성 검증을 겸함.
+- **invariant**(런타임 assert): noise_free ≤ wall_clock · 모든 wait_* ≥ 0 · merge union ≤ 구간 합 AND ≤ wall_clock · attribution 100%(±ε) · ring buffer 유실 시 불완전 trace는 makespan 거부.
+
+## 확정 실험 프로토콜 (locked · 2026-06-09 · 전 P0)
+> **공통 testbed**: **cgroup v2 격리 컨테이너로 서버리스 함수 실행 환경 재현** — Knative 미배포(측정에 필요한 건 cgroup 격리이며 모든 컨테이너 기반 서버리스의 공통 기반. 논문에 그렇게 명시). 컨테이너는 cgroup v2 별도 할당 + CPU/메모리 제한 + 단일 요청 처리.
+> **core 0 제외** + victim/stressor 코어 핀 고정. victim **단일 스레드**. NIC offload off. stressor는 "대기를 만드는" 강도지 자원 고갈 아님. 모든 노이즈 환경 G.T. = *조용한 노드 solo run 분포*(점 아님; 판정=분포 겹침/2-표본 검정).
+
+### 그룹 1 — 핵심 정확도 (1-1·1-2·1-4 / C1·C2, P0·P1)
+- **증명**: 1-1 makespan이 solo 대비 오차 E% 이내(C1) · 1-2 breakdown↔주입 유형 일치(C2) · 1-4 강도 올려도 정확도 유지. **셋을 단일-노이즈 한 측정 세트에서 동시 추출**(중복 측정 X).
+- **victim 4종**: `float`(CPU) · `dd`(block I/O) · cloud storage **업로드**(network — TX만 보이므로 업로드 경로) · video_processing(다자원).
+- **단일 노이즈**: victim별 해당 자원 노이즈 1종 + video는 3종 각각.
+- **강도(1-4)**: 약/중/강 3단계, 대표 victim 1~2개에만. 나머지는 중간 강도 1개로 1-1·1-2만. (전부 돌리고 잘 나오는 것만 본문.)
+- **반복·G.T.**: K=50, solo는 victim당 50회 1회. G.T.=solo 분포.
+- **그림**: 함수별 wall/순수 시간/solo + 오차막대(C1); breakdown 스택바, 주입=자원 1:1(C2); 강도 vs 오차(1-4 robustness).
+- **prune**: 다 돌리고 잘 나온 것만 본문에. 단 C1 정확도 자체가 전 victim 전멸이면 prune 아닌 설계 재검토.
+
+### 1-3 — Mixed noise (C3 / 리뷰 C4, P0)
+- **증명**: 다자원 동시 경합에서 대기가 겹쳐도 정확히 제거 → merge 필요성의 무대.
+- **victim**: FunctionBench video_processing (OpenCV 흑백 변환), **cgroup v2 컨테이너 + MinIO**. **단일 스레드 고정**(`cv2.setNumThreads(1)` + `OMP_NUM_THREADS=1` 등 BLAS 포함). 다운로드·업로드 **동기(blocking)**. 입력 영상 크게 → 읽기 디스크(decode) + CPU(변환) + 업로드 TX 셋 다.
+- **noise 조합**: 단일 3개(CPU/net/bio)는 **1-2 데이터 재사용**(중복 측정 X). 본 실험 = 쌍 3(CPU+net, CPU+bio, net+bio) + 셋(CPU+net+bio). 다 돌리고 겹침 없거나 이상한 조합 사후 제거.
+- **stressor 셋**(각 다른 cgroup): CPU(register/L1) · net(같은 TX qdisc에 패킷) · bio(같은 디바이스/스케줄러 큐, **BFQ**).
+- **반복·G.T.**: K=50. solo는 victim당 50회 1회 → 50 solo + 4조합×50 = **250 호출**. G.T.=solo 분포.
+- **그림**: 조합별 wall/순수 시간/solo; breakdown 스택바(C2 연계); 결정적 그림은 2-1과 공유.
+- **선결 체크포인트**: 실제 겹침 비율 측정. 너무 작으면 victim의 I/O·CPU 인터리빙 패턴 조정(2-1 공통 과제).
+
+### 2-1 — Interval-merge ablation (C3, P0)
+- **증명**: merge가 단순 역산(`wall − Σwait`)보다 정확 — 단순 역산은 겹친 구간 이중 차감으로 noise-free 과소(음수 가능), merge는 합집합으로 한 번만.
+- **데이터**: 1-3 재사용, **새 캡처 없음**. 같은 JSONL을 분석 두 경로로(merge on / 단순 역산).
+- **반복·G.T.**: 1-3 그대로. G.T.=solo 분포. merge는 안에, 단순 역산은 아래(과소).
+- **그림**: 헤드라인 x=겹침 비율(merge−단순역산 차이를 wall 대비 %), y=G.T. 대비 오차 — 단순 역산 우상향, merge 평탄·0 근처, 음수 makespan은 빨간 점. 요약 "단순 역산 최대 N% 과다차감 / merge 오차 E% 이내". 단일 자원 조합=merge≈단순역산 → "겹침 없을 땐 무해" sanity check.
+
+### 3-1 — Input-invariance (C5, P0)
+- **증명**: 자원 커버리지가 아니라 *속성* — intrinsic(input) 작업량 차이는 보존, extrinsic 경합만 제거. CPU 단일 자원으로 충분(속성은 자원 무관). 자원 다양성은 1-3 담당.
+- **victim 2개** (input 변동 두 종류):
+  - `float`(sqrt/sin/cos 루프) — **입력 크기**. CPU only, register/L1-bound → IPC dilation 무관. knob=반복 횟수, solo time ~50ms–수 초 6–8단계.
+  - detect+sentiment 파이프라인 — **입력 내용**(같은 바이트, 얼굴 수가 작업량 결정). 얼굴 수 **0·1·5·10·15·30**. CPU+메모리.
+- **noise**: CPU 경합만. 별도 cgroup, register/L1-bound, 가변/bursty. ⚠️ 메모리 대역폭 안 침(detect+sentiment의 on-CPU dilation 누수 차단 — dilation은 PureTime 범위 밖).
+- **반복·G.T.**: 조건당 K=50(solo K + 경합 K). G.T.=같은 input의 solo **분포**. 매크로 교차검증: input별 `(T_wall,경합 − T_solo)`=제거돼야 할 총 노이즈 ↔ PureTime이 뺀 wait 일치.
+- **그림**: Fig A(x=input level 또는 solo-median time; 3계열 밴드 solo/순수 시간/wall — 순수 시간이 solo 밴드 안착). (SNR kicker Fig B는 실험 4와 중복이라 제거.)
+
+### 3-2 — Single-run vs 통계 baseline + 결정 대조 (C6 / 리뷰 C8, P0 · 5-1·5-2 흡수)
+- **증명**: 통계 baseline(median·P90)은 input 변동 하에서 per-invocation 정답에 수렴 못 함, PureTime은 단일 실행으로 도달. **+ 그 틀린 값이 틀린 결정(false alarm·over-provision)을 낳음.**
+- **데이터**: 3-1 재사용(float 크기변동 + detect+sentiment 내용변동). **추가 측정 없음** — 실험 3의 입력별 측정치를 랜덤 셔플해 "input이 랜덤하게 들어오는" 시계열로 구성. K=50이 통계 표본(N=1→50).
+- **비교**: PureTime 순수 시간(1회) vs raw wall-clock vs N회 median·P90.
+- **메인 plot**: G.T.(solo)·wall·순수 시간의 흐름 위에 mean·P90 밴드. 통계는 input 변동 탓 못 따라옴, 순수 시간은 G.T. 추종.
+- **결정 대조(글 서술 + 측정값, 실행 X)**:
+  - 회귀/카나리: AWS **CloudWatch Anomaly Detection 기본 mean±2σ 밴드** → 노이즈 낀 wall은 밴드 초과(false alarm), 순수 시간은 밴드 안(정상). 순수 시간 분산↓로 밴드 좁아 진짜 회귀 더 빨리.
+  - autoscaling: **KPA containerConcurrency 100 × util 70% = 70/pod** 초과 시 scale-out. Little's Law로 노이즈 부푼 TimePerRequest→concurrency 70 넘김(over-provision), 순수 시간은 미만. 가짜 pod = ⌈부푼/70⌉−⌈진짜/70⌉.
+  - 둘 다 **counterfactual 명시**, 폐루프는 future work. 임계값(2σ·70)은 1차 출처 기본값이라 끼워맞춤 차단.
+- **G.T.**: 각 호출의 solo(해당 입력, 무부하) — 시점마다 다름.
+
+### 4-1 — 오버헤드 (C7 / 리뷰 C6, P0 · 재설계)
+- **증명**: PureTime online 비용이 (A)지연·(B)자원 둘 다에서 현실적 워크로드에 acceptable.
+- **victim**: 그룹1·1-3 재사용. 이벤트 적음(float)~많음(video/net) 다 포함 — (A) 측정 신뢰성(신호 큰 함수일수록 오버헤드 측정 쉬움)·(B) 자원 스펙트럼.
+- **(A) 지연**: w/ vs w/o PureTime, 같은 함수·입력, **조용한 환경**, K=50+ 반복해 분포 비교 + 2-표본 검정 + 차이 신뢰구간. (조용한 환경+반복으로 신호를 노이즈 위로 — HPDC 음수 원인 직접 교정.)
+- **(B) 자원**: Tracer+Loader **CPU%·RSS·256MB ring buffer·JSONL I/O** 절대 프로파일링(빼기 아님).
+- **online만**: eBPF hook + Loader 캡처만. **Analyzer는 offline task로 critical path에 없으므로 리소스 사용량/지연에서 제외(본문 명시).** softirq 필터링 이미 적용.
+- **운영점 주장**: 본문 수치는 현실적 워크로드 = **표준 벤치마크(FunctionBench/SeBS) 기본 입력**(별도 trace 인용 대신 표준 기본값이 곧 현실 운영점).
+- **그림**: 함수별 w/ vs w/o 실행시간 box plot + 차이%·CI; 자원 사용량은 본문/Table(online/offline 분리). 곡선 없음.
+- **rebuttal 카드(본문 외)**: 네트워크 worst-case 점 하나는 리뷰 오면 반영.
+
+## Scope & Limitations (claim을 과장하지 않기 위해 박아둠)
+- **on-CPU 경합 범위 밖**: IPC dilation(LLC·메모리 대역폭), spinlock busy-wait. 향후 과제. → "노이즈를 전부 제거"라고 쓰지 않는다. 3-1/1-3은 register/L1 stressor로 dilation 누수 차단.
+- **sequential execution 가정**: I/O 대기 중 다른 로직 미실행. concurrent 모델은 한계(Reviewer D). → victim은 단일 스레드로 강제해 가정 유지.
+- **Analyzer offline(backlog)**: 실시간 제어 불가 → 3-2 결정 대조는 trace-driven/counterfactual, 온라인은 future work. 오버헤드(4-1)에서도 critical path 밖이라 제외.
+- **보수적 재구성**: 과소 제거 경향(0.6s 잔여). → 약점이 아니라 "실제보다 빠르다고 과장하지 않음"의 증거.
+- **network RX 미추적**: TX(송신 qdisc)만. RX는 future work → net victim은 업로드 경로 사용.
+- **testbed = cgroup v2 컨테이너**: Knative 미배포. "함수 실행 환경 재현"으로 명시.
+
+## 실험 ↔ Claude Code 분담
+- **eBPF 캡처**: 자기 커널/클러스터에서 직접. 데이터셋(영상·얼굴 수별 이미지)도 본인 준비.
+- **Claude Code(레포 내)**: victim 코드(float · detect+sentiment 파이프라인 · video_processing 단일스레드 래핑 · dd · cloud storage 업로드), cgroup v2 컨테이너 하니스(서버리스 환경 재현), Analyzer 코드, JSONL 처리, 정확도/오버헤드 계산, merge·attribution 분석 분기, 통계 baseline·결정 대조 산술, 그림용 수치 산출. (구현 순서·검증은 위 "구현 순서·검증 방법" 절 참조.)
+
+---
+*전 P0(그룹1·1-3·2-1·3-1·3-2·4-1) 프로토콜 확정(설계). 2-1은 1-3, 3-2는 3-1 데이터 공유. 그룹5(5-1·5-2) → 3-2 흡수. C1·C7 기존 데이터는 재설계로 대체. 남은 P1/P2(2-2·6-1·6-2) 계획. 구현은 eBPF+Analyzer 먼저 → audit부터. 결과 확정 시 상태·메모 갱신.*
