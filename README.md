@@ -8,7 +8,7 @@ ethtool -k <인터페이스>  # 인터페이스 현재 설정 확인
 ethtool -K <인터페이스> tso off gso off gro off lro off  # offload disable
 ```
 
-#### Enable NVMe's scheduler
+#### Enable Block device's scheduler
 ```sh
 cat /sys/block/<device>/queue/scheduler  # Block device의 스케줄러 확인
 # none이 아니라 다른게 (대괄호로) 선택되어있으면 Pass
