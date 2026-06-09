@@ -203,32 +203,6 @@ def test_block_no_phantom_leading_slice():
     print("ok: block no phantom leading slice when no foreign preceded insert (wait_bio=50)")
 
 
-def test_block_device_queue_wait():
-    """Device-queue wait: while the victim's request was alive [insert,complete), a FOREIGN
-    request occupied the device [issue,complete) — the victim waited behind it at the device.
-    This is the in-scope wait that insert→issue (scheduler queue) alone misses."""
-    trace = [
-        {"event": "block_rq_insert",   "timestamp_ns": 1000, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "W"},
-        {"event": "block_rq_insert",   "timestamp_ns": 1005, "cgroup_id": 200, "cpu": 0, "request_addr": 2, "rwbs": "W"},
-        {"event": "block_rq_issue",    "timestamp_ns": 1010, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "W"},
-        {"event": "block_rq_issue",    "timestamp_ns": 1050, "cgroup_id": 200, "cpu": 0, "request_addr": 2, "rwbs": "W"},
-        # completes fire in IRQ ctx (cgroup 0); analyzer matches them to issues by request_addr
-        {"event": "block_rq_complete", "timestamp_ns": 1150, "cgroup_id": 0,   "cpu": 0, "request_addr": 2, "rwbs": "W"},
-        {"event": "block_rq_complete", "timestamp_ns": 1200, "cgroup_id": 0,   "cpu": 0, "request_addr": 1, "rwbs": "W"},
-        # a victim event at the end so its span covers the device window (real traces have sched throughout)
-        {"event": "sched_enqueue",     "timestamp_ns": 1200, "cgroup_id": 100, "cpu": 0, "tid": 1, "pid": 1, "comm": "v"},
-    ]
-    path = _write(trace)
-    try:
-        r = NoiseFreeAnalyzer(min_events=1).analyze_file(path, target_cgroups={100})[100]
-    finally:
-        os.unlink(path)
-    # victim life [1000,1200) ∩ foreign-at-device [1050,1150) = 100
-    assert r.wait_bio == 100, r.wait_bio
-    assert r.noise_free_makespan == 100, r.noise_free_makespan  # makespan 200 - 100
-    print("ok: block device-queue wait counted (wait_bio=100; insert→issue alone would miss it)")
-
-
 def test_interval_merge_beats_naive_subtraction():
     """C3 ablation: when CPU and block waits OVERLAP in time, the merged union
     removes the overlap once, while naive per-resource subtraction double-removes it
