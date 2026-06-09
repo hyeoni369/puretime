@@ -368,6 +368,10 @@ int BPF_PROG(handle_net_dev_start_xmit, const struct sk_buff *skb,
     return 0;
 }
 
+/* DISABLED (OPT-1): net_dev_xmit is never consumed by the analyzer, which uses
+ * only net_dev_queue + net_dev_start_xmit. Disabled (not deleted) to cut ~1/3 of
+ * net event volume with no accuracy loss. */
+#if 0
 SEC("tp_btf/net_dev_xmit")
 int BPF_PROG(handle_net_dev_xmit, struct sk_buff *skb, int rc,
              struct net_device *dev, unsigned int len)
@@ -415,10 +419,24 @@ int BPF_PROG(handle_net_dev_xmit, struct sk_buff *skb, int rc,
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
+#endif  /* DISABLED net_dev_xmit (OPT-1) */
 
 /* ============================================================
  * Block I/O Tracepoints
  * ============================================================ */
+
+/* Helper: Get cgroup ID from a block request's owning blkcg.
+ * For buffered writeback the submitting task is a kworker (root cgroup), but the
+ * bio carries the originating cgroup's blkcg, so this attributes the I/O to the
+ * container that issued it. Requires the io controller delegated to the container.
+ */
+static __always_inline __u64 get_rq_blkcg_cgroup_id(struct request *rq)
+{
+    struct cgroup *cgrp = BPF_CORE_READ(rq, bio, bi_blkg, blkcg, css.cgroup);
+    if (!cgrp)
+        return 0;
+    return BPF_CORE_READ(cgrp, kn, id);
+}
 
 SEC("tp_btf/block_rq_insert")
 int BPF_PROG(handle_block_rq_insert, struct request *rq)
@@ -428,7 +446,11 @@ int BPF_PROG(handle_block_rq_insert, struct request *rq)
     blk_opf_t cmd_flags;
     __u64 cgroup_id;
 
-    cgroup_id = bpf_get_current_cgroup_id();
+    /* Attribute by the request's owning blkcg (survives writeback-kworker
+     * submission); fall back to current task for synchronous/direct I/O. */
+    cgroup_id = get_rq_blkcg_cgroup_id(rq);
+    if (cgroup_id <= 1)
+        cgroup_id = bpf_get_current_cgroup_id();
     if (cgroup_id <= 1)
         return 0;  /* Ignore idle and root cgroups */
 
@@ -470,7 +492,11 @@ int BPF_PROG(handle_block_rq_issue, struct request *rq)
     blk_opf_t cmd_flags;
     __u64 cgroup_id;
 
-    cgroup_id = bpf_get_current_cgroup_id();
+    /* Attribute by the request's owning blkcg (survives writeback-kworker
+     * submission); fall back to current task for synchronous/direct I/O. */
+    cgroup_id = get_rq_blkcg_cgroup_id(rq);
+    if (cgroup_id <= 1)
+        cgroup_id = bpf_get_current_cgroup_id();
     if (cgroup_id <= 1)
         return 0;  /* Ignore idle and root cgroups */
 
@@ -503,6 +529,11 @@ int BPF_PROG(handle_block_rq_issue, struct request *rq)
     return 0;
 }
 
+/* DISABLED (OPT-2): block_rq_complete is never consumed by the analyzer (it uses
+ * only block_rq_insert + block_rq_issue) and is emitted without a cgroup filter,
+ * making it the noisiest block hook. Disabled (not deleted) to cut block event
+ * volume and reduce ring-buffer drop pressure. */
+#if 0
 SEC("tp_btf/block_rq_complete")
 int BPF_PROG(handle_block_rq_complete, struct request *rq,
              blk_status_t error, unsigned int nr_bytes)
@@ -539,6 +570,7 @@ int BPF_PROG(handle_block_rq_complete, struct request *rq,
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
+#endif  /* DISABLED block_rq_complete (OPT-2) */
 
 /* ============================================================
  * Softirq Tracepoints
