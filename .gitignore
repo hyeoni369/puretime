@@ -1,2 +1,6 @@
 .direnv
 /build
+
+# Python bytecode
+__pycache__/
+*.pyc

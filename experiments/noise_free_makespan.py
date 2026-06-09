@@ -284,9 +284,16 @@ class NoiseFreeAnalyzer:
             my_enqueue_ts = enqueue.timestamp_ns
             history = self.cpu_switch_history[cpu]
 
-            # Binary search로 범위 찾기: (my_enqueue_ts, timestamp)
-            left = bisect_right(history, (my_enqueue_ts,))  # > my_enqueue_ts
+            # Binary search로 범위 찾기: [my_enqueue_ts, timestamp)
+            left = bisect_right(history, (my_enqueue_ts,))  # 첫 switch-in (>= my_enqueue_ts)
             right = bisect_left(history, (timestamp,))      # < timestamp
+
+            # CPU-3: enqueue 시점에 이미 이 코어를 쥐고 있던 task가 다른 컨테이너면 선행
+            # 슬라이스 [my_enqueue, 다음 switch-in)도 내 wait (victim이 runnable이면 CPU가
+            # idle일 수 없음). 단일코어 핀 가정에서 정확.
+            if left > 0 and history[left - 1][1]['cgroup_id'] != cgroup_id:
+                lead_end = history[left][0] if left < right else timestamp
+                self.cgroup_waits[cgroup_id].add_cpu_wait(my_enqueue_ts, lead_end)
 
             for i in range(left, right):
                 other_switch_ts, hist_event = history[i]

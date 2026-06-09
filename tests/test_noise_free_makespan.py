@@ -115,6 +115,55 @@ def test_zero_drops_trailer_ok():
     print("ok: dropped_events=0 trailer accepted")
 
 
+def test_leading_slice_counted_when_neighbor_already_on_cpu():
+    """CPU-3: if a neighbor was ALREADY on the core when the victim became runnable,
+    the leading slice [enqueue, victim switch-in) is also wait. Before the fix this
+    was dropped (the neighbor's switch-in predates the enqueue, so bisect missed it)."""
+    trace = [
+        # neighbor cg200 grabs CPU0 at 900 (BEFORE the victim wakes)
+        {"event": "sched_switch", "timestamp_ns": 900, "cgroup_id": 200, "cpu": 0, "tid": 2,
+         "prev_cgroup_id": 0, "prev_pid": 0, "prev_tid": 0},
+        # victim cg100 becomes runnable at 1000 but cg200 holds the core
+        {"event": "sched_enqueue", "timestamp_ns": 1000, "cgroup_id": 100, "cpu": 0, "tid": 1},
+        # victim finally runs at 1080
+        {"event": "sched_switch", "timestamp_ns": 1080, "cgroup_id": 100, "cpu": 0, "tid": 1,
+         "prev_cgroup_id": 200, "prev_pid": 2, "prev_tid": 2},
+    ]
+    path = _write(trace)
+    try:
+        res = NoiseFreeAnalyzer(min_events=1).analyze_file(path, target_cgroups={100})
+    finally:
+        os.unlink(path)
+    r = res[100]
+    # victim waited the whole [1000,1080) while the already-running neighbor held the core
+    assert r.wait_cpu == 80, r.wait_cpu
+    assert r.original_makespan == 80, r.original_makespan
+    assert r.noise_free_makespan == 0, r.noise_free_makespan
+    print("ok: CPU-3 leading slice counted (wait_cpu=80; was 0 before fix)")
+
+
+def test_no_leading_slice_when_own_cgroup_or_idle():
+    """CPU-3 must not over-count: if nobody (no recorded neighbor) held the core before
+    the victim's enqueue, the leading slice is NOT invented."""
+    trace = [
+        {"event": "sched_enqueue", "timestamp_ns": 1000, "cgroup_id": 100, "cpu": 0, "tid": 1},
+        # a neighbor steals the core AFTER enqueue (handled by the normal path), then victim runs
+        {"event": "sched_switch", "timestamp_ns": 1020, "cgroup_id": 200, "cpu": 0, "tid": 2,
+         "prev_cgroup_id": 100, "prev_pid": 1, "prev_tid": 1},
+        {"event": "sched_switch", "timestamp_ns": 1080, "cgroup_id": 100, "cpu": 0, "tid": 1,
+         "prev_cgroup_id": 200, "prev_pid": 2, "prev_tid": 2},
+    ]
+    path = _write(trace)
+    try:
+        res = NoiseFreeAnalyzer(min_events=1).analyze_file(path, target_cgroups={100})
+    finally:
+        os.unlink(path)
+    r = res[100]
+    # no recorded occupant before enqueue -> only the in-window steal [1020,1080) counts
+    assert r.wait_cpu == 60, r.wait_cpu
+    print("ok: CPU-3 no phantom leading slice when no neighbor was on-core at enqueue (wait_cpu=60)")
+
+
 def test_interval_merge_beats_naive_subtraction():
     """C3 ablation: when CPU and block waits OVERLAP in time, the merged union
     removes the overlap once, while naive per-resource subtraction double-removes it
