@@ -3,7 +3,7 @@
 > 글쓰기 채팅과 실험 채팅의 **단일 진실(single source of truth)**.
 > 결과가 나올 때마다 이 표를 갱신하고, 양쪽 채팅이 이 표를 기준으로 움직인다.
 > 프로젝트 지식에 올려두고 주기적으로 갱신하거나, 각 채팅 시작 시 붙여넣어 사용.
-> 최종 갱신: 2026-06-09 (**전 P0 설계 확정** · 그룹5 case study → 3-2 흡수 · 4-1 재설계 · testbed = cgroup v2 컨테이너 · 구현 순서·TDD 층 노트 추가)
+> 최종 갱신: 2026-06-09 (**전 P0 설계 확정** · 그룹5 case study → 3-2 흡수 · 4-1 재설계 · testbed = cgroup v2 컨테이너 · 구현 순서·TDD 층 노트 추가 · **audit 수정 반영**: Scope 보강 + "audit 반영 구현 현황" 추가 + ring buffer 512MB/오버헤드 32MB 노트)
 
 ## Thesis (one sentence)
 PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·network·block I/O·softirq의 contention-induced wait를 커널 이벤트에서 추적하고 co-tenant cgroup 활동과 상관시켜 노이즈를 분리한 뒤, interval merge로 겹치는 wait를 중복 없이 제거하여 per-invocation noise-free makespan을 산출하는 최초의 reference-free 시스템이다.
@@ -43,6 +43,15 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
   - Analyzer(interval merge·attribution)·집계·통계 = **TDD 됨**(순수 함수). 가짜 JSONL + 손계산 정답으로 테스트 먼저. novelty 핵심이라 여기가 제일 중요.
   - eBPF 캡처(Tracer hook) = **TDD 아님 → validation**. 무부하→wait~0, 단일 자원 부하→해당 자원 이벤트만. + 실험 1·2·3의 solo 대조가 곧 eBPF 정확성 검증을 겸함.
 - **invariant**(런타임 assert): noise_free ≤ wall_clock · 모든 wait_* ≥ 0 · merge union ≤ 구간 합 AND ≤ wall_clock · attribution 100%(±ε) · ring buffer 유실 시 불완전 trace는 makespan 거부.
+
+### audit 반영 구현 현황 (2026-06-09, `audit` 브랜치 커밋됨)
+점검 → 분류 → 수정 완료분. (figure/CSV는 이 수정 반영 후 재생성 필요 — 미반영.)
+- **Analyzer 정확성**: wait union을 cgroup span `[first_ts,last_ts]`과 교집합(softirq_other 범위 밖 → 음수 makespan 버그 수정); 런타임 invariant assert; `trace_summary` trailer의 `dropped_events>0`이면 exit 2로 거부; CPU wait에 선행 슬라이스 계상(CPU-3, 핑퐁엔 효과~0·I/O wakeup 로버스트성).
+- **interval-merge ablation(C3/2-1) 코드 경로**: 양 분석기가 merge(`noise_free_makespan`) vs naive(union 없는 자원별 합, `noise_free_naive`, 음수 가능) 동시 출력 → 겹침비율 vs 오차 figure 데이터 준비됨. (실험 run·figure는 미실행.)
+- **Tracer/Loader**: block I/O를 bio→bi_blkg→blkcg로 귀속(writeback kworker도 컨테이너 귀속; io 위임 전제); `dropped_events` per-CPU 카운터 + loader trailer + drop 시 조기 중단; `net_dev_xmit`·`block_rq_complete` 비활성(#if 0, 미사용); `sched_event`에서 미사용 `comm`/`prev_comm` 제거(레코드 88→56B); enqueue cgroup walk 중복 제거.
+- **버퍼**: ring buffer 512MB(고부하 기본; 오버헤드 측정만 32MB), json_writer 4MB.
+- **분석기 단일화**: `tests/`·`experiments/` 두 사본을 동일 로직으로 동기화(출력 형식만 다름: human/-j vs jq 배열). 변경 시 양쪽 동시.
+- **부하 실증(CPU)**: 무경합 오차 −0.05%(과잉제거 없음); register/L1-bound 경합에서 +2.6%·제거효율 99%(stress-ng 등 비-register stressor는 범위 밖 IPC dilation이 섞여 오차 과대). drop 감지·거부는 실오버플로(5975만 drop)로 end-to-end 확인.
 
 ## 확정 실험 프로토콜 (locked · 2026-06-09 · 전 P0)
 > **공통 testbed**: **cgroup v2 격리 컨테이너로 서버리스 함수 실행 환경 재현** — Knative 미배포(측정에 필요한 건 cgroup 격리이며 모든 컨테이너 기반 서버리스의 공통 기반. 논문에 그렇게 명시). 컨테이너는 cgroup v2 별도 할당 + CPU/메모리 제한 + 단일 요청 처리.
@@ -107,7 +116,11 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **sequential execution 가정**: I/O 대기 중 다른 로직 미실행. concurrent 모델은 한계(Reviewer D). → victim은 단일 스레드로 강제해 가정 유지.
 - **Analyzer offline(backlog)**: 실시간 제어 불가 → 3-2 결정 대조는 trace-driven/counterfactual, 온라인은 future work. 오버헤드(4-1)에서도 critical path 밖이라 제외.
 - **보수적 재구성**: 과소 제거 경향(0.6s 잔여). → 약점이 아니라 "실제보다 빠르다고 과장하지 않음"의 증거.
-- **network RX 미추적**: TX(송신 qdisc)만. RX는 future work → net victim은 업로드 경로 사용.
+- **network 귀속 = TCP-TX만**: 송신 qdisc(TX)만, 그중 tcp_sendmsg로 등록한 TCP만 귀속(UDP 미등록 — sk_cgrp_data fallback 비신뢰). RX·UDP는 future work → net victim은 TCP 업로드 경로.
+- **CPU 모델 = 단일코어 핀 측정 가정**: enqueue↔switch-in 사이 cross-CPU 마이그레이션 미추적(per-CPU wait). victim/stressor를 같은 코어에 핀해 가정 유지; 핀 없는 일반 배치는 측정 한계로 명시.
+- **호스트/커널 오버헤드 미제거**: co-tenant(컨테이너) 경합만 제거. root/system/커널스레드(cgroup≤1) 점유 CPU는 함수의 실제 비용으로 보존(제거 시 "실제보다 빠르다" 과장 방향이라 의도적). core 0 제외+조용한 노드로 영향 최소화.
+- **block 귀속 전제**: 컨테이너 cgroup에 io 컨트롤러 위임 필요(bio→bi_blkg→blkcg). 미위임 시 current-cgroup fallback → 버퍼드 writeback 미귀속 가능.
+- **ring buffer 유실 → trace 거부**: 불완전 trace엔 makespan 미산출(loader가 dropped_events 카운트·trailer 기록, analyzer가 exit 2로 거부). 고부하 실험은 ring buffer 상향(기본 512MB; 오버헤드 측정만 32MB).
 - **testbed = cgroup v2 컨테이너**: Knative 미배포. "함수 실행 환경 재현"으로 명시.
 
 ## 실험 ↔ Claude Code 분담

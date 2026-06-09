@@ -15,7 +15,13 @@ Before doing project/experiment work, **read `docs/` first** — these define in
 
 **Workflow rule (from the contract):** build the eBPF Tracer/Loader + Analyzer core *first*, then victims/harness/aggregation. Start work with an **audit** (correctness only, no style nits), keep **audit → human-classify → fix as three separate steps**, and don't fix everything in one pass. The `audit` branch is this audit phase.
 
-**Invariants the implementation must hold:** `noise_free ≤ wall_clock`; every `wait_* ≥ 0`; merged wait union `≤ Σ(intervals)` and `≤ wall_clock`; attribution sums to 100% (±ε); a trace with ring-buffer drops must be rejected, not silently measured.
+**Invariants the implementation must hold:** `noise_free ≤ wall_clock`; every `wait_* ≥ 0`; merged wait union `≤ Σ(intervals)` and `≤ wall_clock`; attribution sums to 100% (±ε); a trace with ring-buffer drops must be rejected, not silently measured. *Enforced in code:* `_compute_results` asserts the first four; the loader emits a `trace_summary` trailer with the dropped-event count and the analyzer rejects (exit 2) any trace with `dropped_events > 0`.
+
+**Scope (measured vs out of scope)** — see `docs/claims-experiments-contract.md` "Scope & Limitations":
+- Removes **co-tenant** (container) contention only; **host/kernel/system (cgroup ≤ 1) CPU time is NOT removed** (treated as the function's real cost).
+- CPU-wait model assumes **single-core pinning** (no cross-CPU migration tracking).
+- **Network attribution is TCP-TX only**; **block attribution needs the io controller delegated to the container** (else falls back to current-cgroup).
+- on-CPU IPC dilation (LLC/mem-bandwidth) is out of scope → noise stressors must be **register/L1-bound**, or the measured error absorbs dilation that PureTime cannot (and should not) remove.
 
 ## Build, run, analyze
 
@@ -40,29 +46,32 @@ python3 tests/analyze_trace.py       /var/log/puretime/trace_*.jsonl -o results.
 `noise_free_makespan.py` flags: `-m/--min-events N` (default 100), `-j/--json`, `-c/--cgroups-file <file>` (one cgroup id per line) to restrict analysis.
 
 ### Tests
-There is **no automated unit-test suite yet** (no pytest, no `requirements.txt`). The contract specifies the Analyzer (interval-merge/attribution — pure functions) *should* be TDD'd with hand-crafted JSONL and hand-computed expected values; the eBPF capture is validated empirically (idle → wait≈0; single-resource load → only that resource's events). End-to-end orchestration lives in `tests/run_with_function.sh`, `tests/run_tests_with_benchmark.sh`, and `experiments/exp_*.sh`. Note: the README's `tests/run_tests.sh` is stale (the file no longer exists).
+Run `python3 tests/test_noise_free_makespan.py` — 7 assert-based unit tests (no pytest/`requirements.txt` beyond `portion`+`tqdm`): span-clamp/negative-makespan, ring-buffer-drop rejection (and `dropped_events=0` accepted), in-span CPU wait, CPU-3 leading-slice (and no phantom slice), and the interval-merge-vs-naive ablation (merged valid vs naive over-removed). eBPF capture is validated empirically (idle → wait≈0; single-resource load → only that resource's events). End-to-end orchestration: `tests/run_with_function.sh`, `tests/run_tests_with_benchmark.sh`, `experiments/exp_*.sh`. (README's `tests/run_tests.sh` is stale.)
 
 ### Pre-requirements for valid measurement (non-obvious; see README)
 - Disable NIC offloads: `ethtool -K <iface> tso off gso off gro off lro off`.
 - Block scheduler must not be `[none]` (set `mq-deadline` or `bfq` via `/sys/block/<dev>/queue/scheduler`).
-- Network victims need a MinIO server + an `uploads` bucket (network is **TX-only**, so use the upload path).
+- Network victims need a MinIO server + an `uploads` bucket. Network attribution is **TCP-TX only** (sockets registered via `tcp_sendmsg`; UDP is not), so use a TCP upload path.
+- Noise stressors should be **register/L1-bound** (out-of-scope IPC dilation otherwise inflates the measured error).
 
 ## Architecture: the three-stage pipeline
 
 ```
-kernel eBPF (Tracer) --256MB ring buffer--> userspace Loader (JSONL) --file--> Python Analyzer (makespan)
+kernel eBPF (Tracer) --512MB ring buffer*--> userspace Loader (JSONL) --file--> Python Analyzer (makespan)
+   (* 512MB is the high-load default; lower the events map to 32MB for the overhead experiment 4-1/실험5)
    src/puretime.bpf.c                            src/puretime.c                   tests/noise_free_makespan.py
 ```
 
 The whole system is glued by **`src/puretime.h`** — the binary contract shared by kernel and userspace. It defines the `event_type` enum and the per-subsystem structs (`sched_event`, `net_event`, `block_event`, `softirq_event`), all prefixed with a common `event_header` (`timestamp_ns`, `cgroup_id`, `cpu`, `event_type`). Changing a field here means touching all three stages.
 
-**Tracer (`src/puretime.bpf.c`)** — 12 eBPF programs. Emits binary structs to the `events` ring buffer via `bpf_ringbuf_reserve/submit` (no JSON in the kernel). Hooks: `fentry/enqueue_task` + `tp_btf/sched_switch` (sched), `tp_btf/net_dev_{queue,start_xmit,xmit}`, `tp_btf/block_rq_{insert,issue,complete}`, `tp_btf/softirq_{entry,exit}`. cgroup attribution differs per subsystem and is the subtlest part:
+**Tracer (`src/puretime.bpf.c`)** — 8 active eBPF programs emitting binary structs to the `events` ring buffer via `bpf_ringbuf_reserve/submit` (no JSON in the kernel; a reserve failure bumps a per-CPU `dropped_events` counter). Hooks: `fentry/enqueue_task` + `tp_btf/sched_switch` (sched), `tp_btf/net_dev_{queue,start_xmit}`, `tp_btf/block_rq_{insert,issue}`, `tp_btf/softirq_{entry,exit}`, plus `fentry/tcp_sendmsg`+`tcp_close` (socket→cgroup tracking). `net_dev_xmit` and `block_rq_complete` are present but **disabled via `#if 0`** (never consumed by the analyzer; cuts ~1/3 of net & block event volume). cgroup attribution per subsystem:
 - sched: walk `task → cgroups → dfl_cgrp → kn → id`.
-- block/softirq: `bpf_get_current_cgroup_id()`.
-- network: a socket runs in softirq context where the cgroup reads as root, so `fentry/tcp_sendmsg` (process context) records `socket → cgroup_id` into the `tracked_sockets` hash map, and the net hooks look it up there first, falling back to the socket read. `tcp_close` cleans the map.
-- Filters: drops `cgroup_id ≤ 1` (root/idle); containers are cgroup level ≥ 2; softirq keeps only NET_TX/NET_RX/BLOCK vectors. On `sched_switch`, a preempted prev task (`prev_state==0`) also gets a synthesized `sched_enqueue`.
+- block: the originating blkcg via `rq → bio → bi_blkg → blkcg → css.cgroup → kn → id` (so buffered writeback submitted by a kworker is still attributed to the container), falling back to `bpf_get_current_cgroup_id()` for sync/direct I/O. **Requires the io controller delegated to the container cgroup.**
+- softirq: `bpf_get_current_cgroup_id()`.
+- network: `fentry/tcp_sendmsg` (process context) records `socket → cgroup_id` into the `tracked_sockets` hash map; net hooks look it up, falling back to the socket read. `tcp_close` cleans the map. **TCP-TX only** (UDP not registered).
+- Filters: drops `cgroup_id ≤ 1` (root/idle); softirq keeps only NET_TX/NET_RX/BLOCK vectors. On `sched_switch`, a preempted prev (`prev_state==0`) also gets a synthesized `sched_enqueue`. `sched_event` no longer carries `comm`/`prev_comm` (removed to shrink the two hottest record types 88→56B).
 
-**Loader (`src/puretime.c`)** — libbpf userspace. `main()` opens/loads/attaches the generated skeleton, creates the output file `/var/log/puretime/trace_*.jsonl`, then `ring_buffer__poll(100ms)` in a loop until duration/SIGINT. `handle_event()` dispatches on `event_type` range and serializes each event to one JSONL line via the buffered `json_writer` (`src/json_writer.c`, 4KB buffer).
+**Loader (`src/puretime.c`)** — libbpf userspace. `main()` opens/loads/attaches the skeleton, creates `/var/log/puretime/trace_*.jsonl`, then `ring_buffer__poll(100ms)` until duration/SIGINT/first-drop. `handle_event()` serializes each event to one JSONL line via the buffered `json_writer` (`src/json_writer.c`, **4MB buffer** — amortizes write() syscalls so the single-threaded drain keeps the ring emptied). At shutdown it reads the per-CPU `dropped_events` map, appends a `{"event":"trace_summary","dropped_events":N}` trailer, and warns (and breaks early) if N>0.
 
 **Analyzer (`tests/noise_free_makespan.py`)** — two passes: (1) detect cgroups (count events, record first/last timestamp), (2) read all events, **sort by `timestamp_ns`** (ring-buffer ordering isn't guaranteed across CPUs), then process. Wait is computed identically for every resource by matching a *start* event to its *completion* by a correlation key, then charging the gap where **another** cgroup got serviced first:
 
@@ -73,13 +82,14 @@ The whole system is glued by **`src/puretime.h`** — the binary contract shared
 | block | `block_rq_insert` → `block_rq_issue` | request_addr | other cgroup's request issued in between |
 | softirq | `softirq_entry` → `softirq_exit` (per CPU) | cpu | duration split by per-cgroup event-count ratio into self/other |
 
-Intervals are stored as `portion` interval sets so overlaps merge automatically. Final result per cgroup:
-`noise_free_makespan = (last_ts − first_ts) − interval_sum(cpu ∪ net ∪ bio ∪ softirq_other)`.
+Intervals are stored as `portion` sets so overlaps merge automatically; the union is **clamped to the cgroup's `[first_ts,last_ts]` span** before subtraction (prevents out-of-span softirq_other from driving a negative makespan). CPU wait also counts the **leading slice** `[enqueue, next switch)` when a neighbor already held the core at the victim's enqueue. Final result per cgroup:
+`noise_free_makespan = (last_ts − first_ts) − interval_sum((cpu ∪ net ∪ bio ∪ softirq_other) & span)`.
+`_compute_results` asserts the runtime invariants and rejects (exit 2) any trace whose `trace_summary` trailer reports `dropped_events > 0`. It also emits a **naive (no-union) ablation** quantity `noise_free_naive` (per-resource waits summed without merge → can go negative) for the interval-merge comparison (C3 / exp 2-1). `softirq_self` is computed/reported but **not** subtracted (only `softirq_other` is).
 
-**Data-flow gotchas when auditing/changing the Analyzer:** `net_dev_xmit` and `block_rq_complete` are emitted and written to JSONL but **not consumed** by `noise_free_makespan.py` (they feed the auxiliary `tests/analyze_trace.py`). `softirq_self` is computed and reported but **not** part of the subtracted union — only `softirq_other` is.
+**Two analyzer copies, keep in sync:** `tests/noise_free_makespan.py` (canonical; default output = human text, `-j` = detailed `_ns` JSON) and `experiments/noise_free_makespan.py` (identical logic + fixes, default output = jq-parseable JSON array consumed by `experiments/*.sh`). Apply every analyzer change to **both**.
 
 ## Other directories
 - `funcs/` — victim workloads (compression, graph-bfs, network-uploader, thumbnailer, udp-sender, video-processing).
-- `experiments/` — experiment runners (`exp_accuracy_by_type.sh`, `exp_overhead_{time,resource}.sh`), figure generation (`plot_evaluation.py`), and its own (older) copy of `noise_free_makespan.py`. When fixing the Analyzer, check whether `experiments/noise_free_makespan.py` needs the same change.
+- `experiments/` — experiment runners (`exp_accuracy_by_type.sh`, `exp_overhead_{time,resource}.sh`), figure generation (`plot_evaluation.py`), and its in-sync copy of `noise_free_makespan.py` (see the "two analyzer copies" note above — change both).
 - `libbpf/`, `bpftool/` — git submodules; `vmlinux/` — vendored per-arch `vmlinux.h` for CO-RE.
 - Build env: `flake.nix` (Nix), `dev.dockerfile` + `.devcontainer/`.
