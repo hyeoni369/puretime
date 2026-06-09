@@ -23,6 +23,9 @@ enum event_type {
     /* Softirq Events */
     EVENT_SOFTIRQ_ENTRY     = 30,
     EVENT_SOFTIRQ_EXIT      = 31,
+
+    /* Trace metadata (written once by the loader at shutdown) */
+    EVENT_TRACE_SUMMARY     = 40,
 };
 
 /* Common header for all events */
@@ -71,6 +74,15 @@ struct softirq_event {
     struct event_header hdr;
     __u32 vec;               /* Softirq vector number */
     __u32 reserved;          /* Alignment padding */
+};
+
+/* Trace summary: written once by the loader at shutdown so the analyzer can
+ * reject an incomplete trace. Emitted as a JSONL line:
+ *   {"event":"trace_summary","dropped_events":N}
+ */
+struct trace_summary_event {
+    struct event_header hdr;   /* event_type = EVENT_TRACE_SUMMARY */
+    __u64 dropped_events;      /* total ring-buffer reserve failures */
 };
 
 #endif /* __PURETIME_H */

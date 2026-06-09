@@ -27,6 +27,26 @@ struct {
     __type(value, __u64);    /* cgroup_id */
 } tracked_sockets SEC(".maps");
 
+/* Per-CPU counter of ring buffer reserve failures (dropped events).
+ * The loader reads this at shutdown so an incomplete trace can be rejected
+ * rather than silently measured.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} dropped_events SEC(".maps");
+
+/* Bump the dropped-event counter on a ring buffer reserve failure */
+static __always_inline void count_drop(void)
+{
+    __u32 key = 0;
+    __u64 *cnt = bpf_map_lookup_elem(&dropped_events, &key);
+    if (cnt)
+        __sync_fetch_and_add(cnt, 1);
+}
+
 /* Softirq vector numbers to filter */
 #define NET_TX_SOFTIRQ   1
 #define NET_RX_SOFTIRQ   2
@@ -107,8 +127,10 @@ int BPF_PROG(handle_enqueue_task, struct rq *rq, struct task_struct *p, int flag
         return 0;  /* Ignore idle and root cgroups */
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = get_task_cgroup_id(p);
@@ -145,8 +167,10 @@ int BPF_PROG(handle_sched_switch, bool preempt,
     /* prev가 preempted (TASK_RUNNING) → run queue 재진입 이벤트 */
     if (prev_state == 0) {  /* TASK_RUNNING = 0 */
         e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-        if (!e)
+        if (!e) {
+            count_drop();
             return 0;
+        }
 
         e->hdr.timestamp_ns = bpf_ktime_get_ns();
         e->hdr.cgroup_id = cgroup_id;
@@ -169,8 +193,10 @@ int BPF_PROG(handle_sched_switch, bool preempt,
     
     /* next가 switch in → sched_switch 이벤트 */    
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = cgroup_id;
@@ -274,8 +300,10 @@ int BPF_PROG(handle_net_dev_queue, struct sk_buff *skb)
 
     /* Reserve ring buffer entry */
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cpu = bpf_get_smp_processor_id();
@@ -322,8 +350,10 @@ int BPF_PROG(handle_net_dev_start_xmit, const struct sk_buff *skb,
         return 0;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cpu = bpf_get_smp_processor_id();
@@ -368,8 +398,10 @@ int BPF_PROG(handle_net_dev_xmit, struct sk_buff *skb, int rc,
         return 0;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cpu = bpf_get_smp_processor_id();
@@ -401,8 +433,10 @@ int BPF_PROG(handle_block_rq_insert, struct request *rq)
         return 0;  /* Ignore idle and root cgroups */
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = cgroup_id;
@@ -441,8 +475,10 @@ int BPF_PROG(handle_block_rq_issue, struct request *rq)
         return 0;  /* Ignore idle and root cgroups */
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = cgroup_id;
@@ -476,8 +512,10 @@ int BPF_PROG(handle_block_rq_complete, struct request *rq,
     blk_opf_t cmd_flags;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = bpf_get_current_cgroup_id();
@@ -516,8 +554,10 @@ int BPF_PROG(handle_softirq_entry, unsigned int vec)
         return 0;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = bpf_get_current_cgroup_id();
@@ -541,8 +581,10 @@ int BPF_PROG(handle_softirq_exit, unsigned int vec)
         return 0;
 
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if (!e)
+    if (!e) {
+        count_drop();
         return 0;
+    }
 
     e->hdr.timestamp_ns = bpf_ktime_get_ns();
     e->hdr.cgroup_id = bpf_get_current_cgroup_id();

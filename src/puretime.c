@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
 #include "puretime.h"
 #include "puretime.skel.h"
 #include "json_writer.h"
@@ -104,6 +105,28 @@ static const char *event_type_str(int type)
     case EVENT_SOFTIRQ_EXIT:      return "softirq_exit";
     default:                      return "unknown";
     }
+}
+
+/* Sum the per-CPU dropped-event counter (ring buffer reserve failures) */
+static __u64 read_dropped_events(struct puretime_bpf *skel)
+{
+    __u32 key = 0;
+    int ncpu = libbpf_num_possible_cpus();
+    __u64 total = 0;
+
+    if (ncpu <= 0)
+        return 0;
+
+    __u64 *values = calloc(ncpu, sizeof(__u64));
+    if (!values)
+        return 0;
+
+    if (bpf_map_lookup_elem(bpf_map__fd(skel->maps.dropped_events), &key, values) == 0) {
+        for (int i = 0; i < ncpu; i++)
+            total += values[i];
+    }
+    free(values);
+    return total;
 }
 
 /* Ring buffer event handler */
@@ -289,6 +312,27 @@ int main(int argc, char **argv)
             fprintf(stderr, "Error polling ring buffer: %d\n", err);
             break;
         }
+
+        /* Stop early if the ring buffer overflowed: the trace is now incomplete,
+         * so there is no point continuing. Re-run with a larger ring buffer. */
+        if (read_dropped_events(skel) > 0)
+            break;
+    }
+
+    /* Record dropped-event count so the analyzer can reject an incomplete trace */
+    {
+        __u64 dropped = read_dropped_events(skel);
+        if (jw) {
+            json_writer_start_object(jw);
+            json_writer_add_string(jw, "event", "trace_summary");
+            json_writer_add_uint64(jw, "dropped_events", dropped);
+            json_writer_end_object(jw);
+        }
+        if (dropped > 0)
+            fprintf(stderr,
+                "WARNING: %llu events dropped (ring buffer full); trace is incomplete. "
+                "Increase the ring buffer size and re-run.\n",
+                (unsigned long long)dropped);
     }
 
     if (env.verbose)
