@@ -164,6 +164,45 @@ def test_no_leading_slice_when_own_cgroup_or_idle():
     print("ok: CPU-3 no phantom leading slice when no neighbor was on-core at enqueue (wait_cpu=60)")
 
 
+def test_block_leading_slice_counted():
+    """Block wait: a foreign request was being serviced (issued just before the victim's
+    insert), so the victim waits from INSERT, not from the next foreign issue. Mirrors CPU-3."""
+    trace = [
+        # foreign cg200 request issued at 900 (occupying the device)
+        {"event": "block_rq_insert", "timestamp_ns": 850, "cgroup_id": 200, "cpu": 0, "request_addr": 2, "rwbs": "W"},
+        {"event": "block_rq_issue",  "timestamp_ns": 900, "cgroup_id": 200, "cpu": 0, "request_addr": 2, "rwbs": "W"},
+        # victim cg100 inserts at 1000 (waits behind foreign), issues at 1100
+        {"event": "block_rq_insert", "timestamp_ns": 1000, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "W"},
+        {"event": "block_rq_issue",  "timestamp_ns": 1100, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "W"},
+    ]
+    path = _write(trace)
+    try:
+        r = NoiseFreeAnalyzer(min_events=1).analyze_file(path, target_cgroups={100})[100]
+    finally:
+        os.unlink(path)
+    assert r.wait_bio == 100, r.wait_bio              # [insert=1000, issue=1100)
+    assert r.noise_free_makespan == 0, r.noise_free_makespan
+    print("ok: block leading slice counted from insert (wait_bio=100; was 0 before fix)")
+
+
+def test_block_no_phantom_leading_slice():
+    """Block: if no foreign request preceded the victim's insert, no leading slice is invented."""
+    trace = [
+        {"event": "block_rq_insert", "timestamp_ns": 1000, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "W"},
+        # foreign issues AFTER victim insert (handled by the normal path), then victim issues
+        {"event": "block_rq_issue",  "timestamp_ns": 1050, "cgroup_id": 200, "cpu": 0, "request_addr": 2, "rwbs": "W"},
+        {"event": "block_rq_issue",  "timestamp_ns": 1100, "cgroup_id": 100, "cpu": 0, "request_addr": 1, "rwbs": "W"},
+    ]
+    path = _write(trace)
+    try:
+        r = NoiseFreeAnalyzer(min_events=1).analyze_file(path, target_cgroups={100})[100]
+    finally:
+        os.unlink(path)
+    # only the in-window foreign issue [1050,1100) counts; no phantom [1000,1050)
+    assert r.wait_bio == 50, r.wait_bio
+    print("ok: block no phantom leading slice when no foreign preceded insert (wait_bio=50)")
+
+
 def test_interval_merge_beats_naive_subtraction():
     """C3 ablation: when CPU and block waits OVERLAP in time, the merged union
     removes the overlap once, while naive per-resource subtraction double-removes it

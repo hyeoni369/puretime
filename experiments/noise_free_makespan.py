@@ -379,9 +379,15 @@ class NoiseFreeAnalyzer:
         if my_request and my_request.cgroup_id in target_cgroups:
             my_insert_ts = my_request.insert_timestamp_ns
 
-            # Binary search로 범위 찾기: (my_insert_ts, timestamp)
-            left = bisect_right(self.block_issue_history, (my_insert_ts,))  # > my_insert_ts
+            # Binary search로 범위 찾기: [my_insert_ts, timestamp)
+            left = bisect_right(self.block_issue_history, (my_insert_ts,))  # 첫 issue (>= my_insert_ts)
             right = bisect_left(self.block_issue_history, (timestamp,))     # < timestamp
+
+            # 선행 슬라이스(CPU-3와 동일 원리): insert 직전 마지막 issue가 다른 cgroup이면
+            # [insert, 다음 issue)도 내 wait (foreign 시점부터만 세던 과소계상 교정).
+            if left > 0 and self.block_issue_history[left - 1][1]['cgroup_id'] != my_request.cgroup_id:
+                lead_end = self.block_issue_history[left][0] if left < right else timestamp
+                self.cgroup_waits[my_request.cgroup_id].add_bio_wait(my_insert_ts, lead_end)
 
             for i in range(left, right):
                 other_issue_ts, hist_event = self.block_issue_history[i]
