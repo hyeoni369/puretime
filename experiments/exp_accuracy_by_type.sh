@@ -22,8 +22,12 @@ set -e
 
 # 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
 CPU_CONTAINER_COUNTS=(1 2 4 8)
-NET_CONTAINER_COUNTS=(1 2 4 8)
 BIO_CONTAINER_COUNTS=(1 5 10 15)
+
+# Network noise = iperf3 stressor 강도(병렬 TCP flow 수, -P). 0=solo(stressor 없음, GT 기준).
+# (이전엔 업로더 컨테이너 수였음. victim은 항상 uploader 1개; 노이즈만 iperf3로 교체.)
+# 강도 sweep상 -P 4(≈5 flow)가 sweet spot(removal ~88%). iperf3 서버가 $MINIO_IP:5201에 떠 있어야 함.
+NET_STRESS_FLOWS=(0 4)
 
 # 반복 실험 횟수
 ITERATIONS=100
@@ -63,10 +67,11 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log_info() { echo -e "${CYAN}[INFO]${NC} $1"; }
-log_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
-log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+# 로그는 stderr로 — $(setup_network_throttle) 같은 함수 출력 캡처에 로그가 섞이지 않도록.
+log_info() { echo -e "${CYAN}[INFO]${NC} $1" >&2; }
+log_pass() { echo -e "${GREEN}[PASS]${NC} $1" >&2; }
+log_fail() { echo -e "${RED}[FAIL]${NC} $1" >&2; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 
 # =============================================================================
 # Helper Functions
@@ -309,44 +314,64 @@ run_cpu_experiment() {
 }
 
 run_network_experiment() {
-    local count="$1"
+    # $1 = iperf3 stressor 강도(-P, 병렬 TCP flow 수). 0이면 solo(노이즈 없음, GT 기준).
+    # victim은 항상 uploader 컨테이너 1개; 노이즈는 별도 cgroup의 호스트 iperf3(분석 대상 아님).
+    local flows="$1"
     local iteration="$2"
-    
-    log_info "Network experiment: $count containers, iteration $iteration"
-    
+
+    log_info "Network experiment: iperf3 -P $flows stressor, iteration $iteration"
+
     ensure_testfile
-    local cgroup_file="$OUTPUT_DIR/cgroups_net_${count}_${iteration}.txt"
-    
+    local cgroup_file="$OUTPUT_DIR/cgroups_net_${flows}_${iteration}.txt"
+    # stressor cgroup은 반드시 level>=2여야 tracer의 tcp_sendmsg 등록(is_container_cgroup)이 잡는다.
+    local stress_cg="/sys/fs/cgroup/pt_netstress/s"
+
     # Setup network throttle
     local iface=$(setup_network_throttle)
-    
+
     # Start PureTime
     $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
-    
+
     local trace_file=$(get_latest_trace)
-    
-    # Start containers
-    start_containers "$NETWORK_UPLOADER_IMAGE" "$count" "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
+
+    # Start the network stressor: 호스트 iperf3 -P $flows (별도 level-2 cgroup), 원격 서버로 TCP 송신.
+    # iperf3 서버가 $MINIO_IP:5201에 떠 있어야 함. UDP(-u) 금지(PureTime은 TCP-TX만 귀속).
+    local stress_pid=""
+    if [ "$flows" -gt 0 ]; then
+        mkdir -p "$stress_cg"
+        bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec iperf3 -c $MINIO_IP -P $flows -t $TRACE_DURATION" > /dev/null 2>&1 &
+        stress_pid=$!
+        sleep 2   # 노이즈가 먼저 램프업한 뒤 victim 시작
+    fi
+
+    # Start the victim: 실제 측정 대상 uploader 컨테이너 1개
+    start_containers "$NETWORK_UPLOADER_IMAGE" 1 "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
     save_cgroup_ids "$cgroup_file"
-    
-    # Wait for completion
+
+    # Wait for the victim to finish
     wait_containers
-    
-    # Stop PureTime
+
+    # Stop stressor + PureTime
+    if [ -n "$stress_pid" ]; then
+        kill "$stress_pid" 2>/dev/null || true
+        pkill -9 -f "iperf3 -c $MINIO_IP" 2>/dev/null || true
+    fi
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
-    
-    # Analyze
+
+    # Analyze (victim cgroup만)
     local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
 
-    # Save results to CSV
-    save_puretime_results "$puretime_result" "network" "$count" "$iteration"
+    # Save results to CSV (container_count 열 = iperf3 -P flows)
+    save_puretime_results "$puretime_result" "network" "$flows" "$iteration"
 
     # Cleanup
     stop_containers
     teardown_network_throttle "$iface"
+    rmdir "$stress_cg" 2>/dev/null || true
+    rmdir /sys/fs/cgroup/pt_netstress 2>/dev/null || true
 }
 
 run_block_io_experiment() {
@@ -415,9 +440,9 @@ main() {
     # Network Experiments
     log_info ""
     log_info "=== Network Contention Experiments ==="
-    for count in "${NET_CONTAINER_COUNTS[@]}"; do
+    for flows in "${NET_STRESS_FLOWS[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
-            run_network_experiment "$count" "$iter"
+            run_network_experiment "$flows" "$iter"
             sleep 10
         done
     done
