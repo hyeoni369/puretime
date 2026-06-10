@@ -119,6 +119,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **Analyzer offline(backlog)**: 실시간 제어 불가 → 3-2 결정 대조는 trace-driven/counterfactual, 온라인은 future work. 오버헤드(4-1)에서도 critical path 밖이라 제외.
 - **보수적 재구성**: 과소 제거 경향(0.6s 잔여). → 약점이 아니라 "실제보다 빠르다고 과장하지 않음"의 증거.
 - **network 귀속 = TCP-TX만**: 송신 qdisc(TX)만, 그중 tcp_sendmsg로 등록한 TCP만 귀속(UDP 미등록 — sk_cgrp_data fallback 비신뢰). RX·UDP는 future work → net victim은 TCP 업로드 경로.
+- **network 잔여 = TCP 혼잡 백오프(범위 밖)**: 경합 시 잔여(+49~85%)의 주원인. throttle+AQM(fq_codel)이 패킷을 드롭→co-tenant가 유발한 TCP 혼잡제어가 congestion window를 줄여, 데이터가 **소켓 버퍼에서 대기**(qdisc enqueue 이전). net_dev 훅은 qdisc부터 보므로 이 소켓레벨 지연을 못 본다(= block seek dilation과 동류, co-tenant 유발이나 모델 범위 밖). 그래서 removal은 73~86%(count↑일수록↑)에서 멈추고 그 이상은 sound하게 못 올린다. **검증·기각**: skb_addr FIFO 매칭=과다제거(removal 133%, stale 큐); pfifo 깊은버퍼=매칭 붕괴(2%); LIFO=현재 overwrite와 동일. 현재 overwrite(=가장 최근 큐) 매칭이 보수적·sound한 최선. 매칭률 47%의 손실분 대부분은 **qdisc 우회 패킷**(net_dev_queue 없음=애초 안 기다림)이라 제외가 정당.
 - **CPU 모델 = 단일코어 핀 측정 가정**: enqueue↔switch-in 사이 cross-CPU 마이그레이션 미추적(per-CPU wait). victim/stressor를 같은 코어에 핀해 가정 유지; 핀 없는 일반 배치는 측정 한계로 명시.
 - **호스트/커널 오버헤드 미제거**: co-tenant(컨테이너) 경합만 제거. root/system/커널스레드(cgroup≤1) 점유 CPU는 함수의 실제 비용으로 보존(제거 시 "실제보다 빠르다" 과장 방향이라 의도적). core 0 제외+조용한 노드로 영향 최소화.
 - **block 귀속 전제**: 컨테이너 cgroup에 io 컨트롤러 위임 필요(bio→bi_blkg→blkcg). 미위임 시 current-cgroup fallback → 버퍼드 writeback 미귀속 가능.
