@@ -22,7 +22,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 
 | ID | Claim (falsifiable) | 검증 실험 | 리뷰 대응 | 우선 | 상태 | 결과/메모 |
 |----|---------------------|-----------|-----------|------|------|-----------|
-| C1 | noise-free makespan이 solo 기준(GT) 대비 오차 E% 이내 | 1-1, 1-2, 1-4 | core | **P0** | **설계** | 그룹1 단일-노이즈 **한 세트**에서 1-1·1-2·1-4 동시 추출. victim 4종, K=50, solo 분포 GT, 분포+오차막대. 단일 사례 96.25%(0.6s 잔여)는 보강 대상 |
+| C1 | noise-free makespan이 solo 기준(GT) 대비 오차 E% 이내 | 1-1, 1-2, 1-4 | core | **P0** | **설계** | 그룹1 단일-노이즈 **한 세트**에서 1-1·1-2·1-4 동시 추출. victim 4종, K=50, solo 분포 GT, 분포+오차막대. **E2E 실측(06-12): CPU 99%@1.7×·Net 88~93%@4~5× = ≥80%@≥1.5× 확실(강조); Block ~65~76%(구조적 한계 — "최종 프레이밍 결정" 노트 참조, 정직 프레이밍).** |
 | C2 | 네 자원 각각의 wait를 정확히 분류·귀속 (breakdown ↔ 주입 유형 일치) | 1-2 | — | P1 | **설계** | 그룹1 세트에서 추출. 자원 전용 victim이면 주입↔귀속 1:1로 깨끗. 1-3 스택바와 연계 |
 | C3 | 자원 간 wait가 겹쳐도 중복 없이 제거 — 단순 역산 대비 과다차감 회피 | 1-3, 2-1 | C4 | **P0** | **설계** | 1-3(victim=video_processing, 단일스레드)에서 쌍+셋 조합 → 2-1에서 merge vs 단순역산. 겹침 비율을 x축으로 과다차감 정량화. **novelty 핵심** |
 | C4 | self/neighbor 구분으로 정당한 self 대기는 보존, neighbor 노이즈만 제거 | 2-2 | — | P1 | 계획 | 분류 제거 시 결과 유의 변화 보여야 (미설계) |
@@ -54,6 +54,12 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **부하 실증(CPU)**: 무경합 오차 −0.05%(과잉제거 없음); register/L1-bound 경합에서 +2.6%·제거효율 99%(stress-ng 등 비-register stressor는 범위 밖 IPC dilation이 섞여 오차 과대). drop 감지·거부는 실오버플로(5975만 drop)로 end-to-end 확인.
 - **E2E 3자원 검증(2026-06-10)**: 현재 코드로 실측 — **CPU** 동일코어 핀+register/L1 경합 removal **99%**(잔여 +0.5%); **Network** HTB 10mbit throttle count=4 removal **73%**(커밋 75%); **Block** 약한 regime real-compression count=5 removal **68%**(커밋 60~76%). 셋 다 **과다제거 없음**(noise_free ≥ solo). 모두 보수적.
 - **BIO-2(device-queue) 폐기 — 재시도 금지**: block을 issue→complete(`[insert,complete) ∩ foreign 장치점유`)로 끌어올려 76~86%를 봤으나, E2E 검증에서 **과다제거**(noise_free가 solo보다 22% 아래, removal 107%) 확인 → `git revert`(13a3207→31ce1b9). 원인: **단일서버(HDD 헤드 1개)에서 "foreign in-flight ≠ 내가 대기"** (foreign이 내 뒤에 큐잉됐을 수 있어 이중계상). NVMe는 병렬이라 더 심함. 향후 누가 device-queue를 다시 켜려면 이 과다제거부터 해결해야 함. 현재 block = sound한 insert→issue(선행 슬라이스) 단독.
+- **최종 프레이밍 결정 (2026-06-12): CPU·Network 강하게, Block은 정직하게 — "1번".** wall이 1.5배 이상 늘어나는 *의미있는* 경합에서의 removal로 판정:
+  - **CPU 99% @ 1.7× · Network 88~93% @ 3.9~5.0×** (iperf3 -P4 stressor, 별도 cgroup). 둘 다 **≥80% removal @ ≥1.5× wall 안정적, 과다제거 0** → 논문 강하게.
+  - **Block은 ≥1.5×(실측 ≥3×) 경합에서 reliably ~65~76%** (O_DIRECT 65~69% @ 3.6~4.5×, real-compression 68% @ 1.6×; 버퍼드 89% @ 2.8×는 불안정+과다제거). **≥80%는 sound·reliably 불가.**
+  - **Block ≥80% 불가 = 구조적 한계(확정, ~16개 디바이스/스케줄러/커널-리밋 설정 실측)**: 모델이 잡는 [insert→issue]는 **I/O 스케줄러 큐 대기**인데, `block_rq_issue`는 "드라이버에 dispatch한 시점"에 찍힌다(장치가 *실제 서비스 시작*하는 시점 ✗). 경합 대기는 그 뒤 [issue→complete]에 형성 → 사각. [insert→issue]에 대기가 오는 유일한 경우 = 장치가 물리적으로 다음 요청을 못 받을 때 = **HDD = seek dilation**. 시도·기각: flash/NVMe-loop·scsi_debug(ndelay 병렬→[issue,complete]; delay+max_queue=1 직렬화해도 경합 7~18%)·queue_depth=1(HDD 89%지만 seek+불안정)·BFQ idling(fast dev 8~31%)·커널 리밋(io.max=insert 이전 사각, io.weight=버퍼드에 약함). **knob 문제 아니라 트레이스포인트가 I/O 스택의 어디 박혀있나의 문제.**
+  - **논문 block 주장 = "스케줄러 큐 경합 ~65~76% 정확 제거, 장치 레벨 dilation은 범위 밖(IPC dilation의 디스크판)".** 억지 80%는 불안정/과다제거라 리뷰 리스크.
+  - **future work(연구, config 아님)**: rq 트레이스포인트 대신 per-cgroup `io.stat`(장치 점유 시간) 기반으로 [issue→complete] 경합을 다른 방식으로 귀속 → 단일서버 가정에서 sound화 여지. PureTime 측정 코어 재작성 필요.
 
 ## 확정 실험 프로토콜 (locked · 2026-06-09 · 전 P0)
 > **공통 testbed**: **cgroup v2 격리 컨테이너로 서버리스 함수 실행 환경 재현** — Knative 미배포(측정에 필요한 건 cgroup 격리이며 모든 컨테이너 기반 서버리스의 공통 기반. 논문에 그렇게 명시). 컨테이너는 cgroup v2 별도 할당 + CPU/메모리 제한 + 단일 요청 처리.
