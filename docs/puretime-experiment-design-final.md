@@ -16,6 +16,8 @@
   - 각 함수는 **고정 입력**으로 실행하고, **solo run(동일 입력, 무부하)을 G.T.**로 삼음
 - 리소스에 맞는 stress 도구로 부하를 주면서 함수를 실행하고, 함수의 solo run 실행 시간과 PureTime으로 추출한 순수 실행 시간의 차이를 비교
   - stress 도구의 부하 정도를 다르게 하여, 부하 수준에 따라 정확도가 어떻게 되는지 확인
+  - **stressor(별도 cgroup)**: CPU = register/L1-bound 루프(cpuburn) · Block = fsync 쓰기(BFQ) · **Network = `iperf3 -c` (TCP, 별도 level≥2 cgroup), 강도 = `-P` 병렬 flow 수.** HTB 10mbit throttle 하에서 같은 TX qdisc 경합. (`exp_accuracy_by_type.sh` `NET_STRESS_FLOWS`; 이전 "업로더 컨테이너 N개"에서 교체 — victim은 uploader 1개 그대로.) iperf3 서버 필요, **TCP만**(UDP 미추적).
+  - **실측 결과(wall ≥1.5× 의미있는 경합)**: CPU 99%@1.7× · Network 88~93%@4~5× = **≥80% removal 안정적**. **Block은 ~65~76%**(스케줄러 큐 경합만 제거; 장치 dilation은 범위 밖 — `block_rq_issue`가 dispatch 시점이라 [issue→complete] 대기 사각, ~16개 설정 실측 확정. claims-contract "최종 프레이밍 결정" 노트 참조). → 논문은 CPU·Net 강조, Block 정직 프레이밍.
 
 ### Figure
 
