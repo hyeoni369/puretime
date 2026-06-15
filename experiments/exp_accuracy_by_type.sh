@@ -22,7 +22,7 @@ set -e
 
 # CPU noise = stress-ng CPU worker 수(register/L1 --cpu-method float, victim과 같은 코어). 0=solo(GT 기준).
 # (이전엔 graph-bfs 컨테이너 N개 상호경합 = 약함+메모리 dilation. victim은 항상 float 1개; stressor만 stress-ng.)
-CPU_STRESS_WORKERS=(0 1 2 4)
+CPU_STRESS_WORKERS=(0 1 3 7)
 # Block noise = fio 동시 job 수 (같은 디바이스 $HDD_MOUNT에 연속 버퍼드+fsync 쓰기 stressor). 0=solo(GT 기준).
 # (이전엔 compression 컨테이너 N개 상호경합=약함. victim은 항상 compression 1개; stressor만 fio.)
 BIO_STRESS_JOBS=(0 4)
@@ -305,11 +305,13 @@ run_cpu_experiment() {
     local trace_file=$(get_latest_trace)
 
     # CPU stressor: 호스트 stress-ng, register/L1-bound, victim과 같은 코어($CPU_PIN_CORE)에 핀, 연속.
-    local stress_pid=""
+    # 강도 = N개의 *별도 cgroup*(각 1 worker). per-cgroup 공정성이라 victim+N = (N+1)-way → 1/(N+1)
+    # → 2×/4×/8× scale (한 cgroup에 N worker면 cgroup 공정성으로 ~2×에 고정되므로 분리 필수).
     if [ "$workers" -gt 0 ]; then
-        mkdir -p "$stress_cg"
-        bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec stress-ng --cpu $workers --cpu-method float --taskset $CPU_PIN_CORE --cpu-load 100 -t $TRACE_DURATION" > /dev/null 2>&1 &
-        stress_pid=$!
+        for w in $(seq 1 "$workers"); do
+            mkdir -p "${stress_cg}_$w"
+            bash -c "echo \$\$ > ${stress_cg}_$w/cgroup.procs; exec stress-ng --cpu 1 --cpu-method float --taskset $CPU_PIN_CORE --cpu-load 100 -t $TRACE_DURATION" > /dev/null 2>&1 &
+        done
         sleep 1   # stressor 램프업 후 victim 시작
     fi
 
@@ -319,10 +321,7 @@ run_cpu_experiment() {
     wait_containers
 
     # stressor + PureTime 종료
-    if [ -n "$stress_pid" ]; then
-        kill "$stress_pid" 2>/dev/null || true
-        pkill -9 -f "stress-ng" 2>/dev/null || true
-    fi
+    pkill -9 -f "stress-ng" 2>/dev/null || true
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
 
@@ -330,7 +329,7 @@ run_cpu_experiment() {
     save_puretime_results "$puretime_result" "cpu" "$workers" "$iteration"
 
     stop_containers
-    rmdir "$stress_cg" 2>/dev/null || true
+    for w in $(seq 1 "$workers"); do rmdir "${stress_cg}_$w" 2>/dev/null || true; done
 }
 
 run_network_experiment() {
