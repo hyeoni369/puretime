@@ -4,3 +4,6 @@
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Experiment intermediate artifacts (per-run cgroup-id lists); keep results.csv + figures
+experiments/data/**/cgroups_*.txt

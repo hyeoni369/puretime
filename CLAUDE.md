@@ -51,6 +51,7 @@ Run `python3 tests/test_noise_free_makespan.py` — 9 assert-based unit tests (n
 ### Pre-requirements for valid measurement (non-obvious; see README)
 - Disable NIC offloads: `ethtool -K <iface> tso off gso off gro off lro off`.
 - Block scheduler must not be `[none]` (set `mq-deadline` or `bfq` via `/sys/block/<dev>/queue/scheduler`).
+- **Limit NCQ depth: `echo 2 > /sys/block/<dev>/device/queue_depth`** (restore to 32 after). At the default depth 32, NCQ dispatches many requests to the device at once so block contention hides in `issue→complete` device service time — which PureTime cannot see (`block_rq_complete` is `#if 0`), giving only ~39% removal. depth=2 serializes contention into the OS scheduler queue (`insert→issue`), which PureTime *does* measure → block removal rises to ~83–87% with `noise_free ≈ solo`. (depth=1 over-serializes and over-removes: `noise_free < solo`.) This is a measurement prerequisite analogous to disabling NIC offload; `exp_accuracy_by_type.sh` sets/restores it via `BLOCK_QUEUE_DEPTH` (default 2).
 - Network victims need a MinIO server + an `uploads` bucket. Network attribution is **TCP-TX only** (sockets registered via `tcp_sendmsg`; UDP is not), so use a TCP upload path.
 - Noise stressors should be **register/L1-bound** (out-of-scope IPC dilation otherwise inflates the measured error).
 

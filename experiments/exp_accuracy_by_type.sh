@@ -114,7 +114,12 @@ check_prerequisites() {
 
 setup_output() {
     mkdir -p "$OUTPUT_DIR"
-    echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,t_puretime_ms,t_noise_cpu,t_noise_net,t_noise_bio" > "$RESULTS_FILE"
+    # 기존 CSV가 있으면 헤더를 덮어쓰지 않고 append (자원별 부분 재실행 지원)
+    if [ ! -f "$RESULTS_FILE" ]; then
+        echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,t_puretime_ms,t_noise_cpu,t_noise_net,t_noise_bio" > "$RESULTS_FILE"
+    else
+        log_info "기존 결과에 append: $RESULTS_FILE ($(($(wc -l < "$RESULTS_FILE") - 1)) rows)"
+    fi
     log_info "Output directory: $OUTPUT_DIR"
 }
 
@@ -231,6 +236,11 @@ teardown_network_throttle() {
 
 BLOCK_DEVICE=""
 ORIGINAL_SCHEDULER=""
+ORIGINAL_QUEUE_DEPTH=""
+# block 측정 전제조건: NCQ depth를 낮춰 경합을 OS 큐(insert→issue)로 노출.
+# depth=2 → noise_free가 solo를 복원(removal~96%); depth=1은 완전직렬화로 과다제거(nf<solo);
+# depth=32(기본)은 경합이 디바이스 내부(issue→complete)에 숨어 과소포착(removal~39%).
+BLOCK_QUEUE_DEPTH="${BLOCK_QUEUE_DEPTH:-2}"
 
 setup_io_scheduler() {
     local docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
@@ -249,12 +259,27 @@ setup_io_scheduler() {
             echo bfq > "$sched_path" 2>/dev/null || true
         fi
     fi
+
+    # NCQ queue_depth 제한 (block 경합을 큐잉 층으로 노출; 위 BLOCK_QUEUE_DEPTH 주석 참조)
+    local qd_path="/sys/block/$BLOCK_DEVICE/device/queue_depth"
+    if [ -f "$qd_path" ]; then
+        ORIGINAL_QUEUE_DEPTH=$(cat "$qd_path" 2>/dev/null)
+        if [ -n "$ORIGINAL_QUEUE_DEPTH" ] && [ "$ORIGINAL_QUEUE_DEPTH" != "$BLOCK_QUEUE_DEPTH" ]; then
+            log_info "Limiting NCQ queue_depth $ORIGINAL_QUEUE_DEPTH->$BLOCK_QUEUE_DEPTH on $BLOCK_DEVICE..."
+            echo "$BLOCK_QUEUE_DEPTH" > "$qd_path" 2>/dev/null || true
+        fi
+    fi
 }
 
 restore_io_scheduler() {
     if [ -n "$BLOCK_DEVICE" ] && [ -n "$ORIGINAL_SCHEDULER" ] && [ "$ORIGINAL_SCHEDULER" != "bfq" ]; then
         local sched_path="/sys/block/$BLOCK_DEVICE/queue/scheduler"
         echo "$ORIGINAL_SCHEDULER" > "$sched_path" 2>/dev/null || true
+    fi
+    # queue_depth 복원
+    if [ -n "$BLOCK_DEVICE" ] && [ -n "$ORIGINAL_QUEUE_DEPTH" ]; then
+        local qd_path="/sys/block/$BLOCK_DEVICE/device/queue_depth"
+        echo "$ORIGINAL_QUEUE_DEPTH" > "$qd_path" 2>/dev/null || true
     fi
 }
 
@@ -455,8 +480,13 @@ main() {
     
     log_info "Starting Noise Type Accuracy Experiments"
     log_info "========================================="
-    
+
+    # RESOURCES 환경변수로 실행할 자원 선택 (기본=전부). 예: RESOURCES=block
+    local RESOURCES="${RESOURCES:-cpu network block}"
+    log_info "Resources to run: $RESOURCES"
+
     # CPU Experiments
+    if [[ " $RESOURCES " == *" cpu "* ]]; then
     log_info ""
     log_info "=== CPU Contention Experiments ==="
     for workers in "${CPU_STRESS_WORKERS[@]}"; do
@@ -465,8 +495,10 @@ main() {
             sleep 10
         done
     done
-    
+    fi
+
     # Network Experiments
+    if [[ " $RESOURCES " == *" network "* ]]; then
     log_info ""
     log_info "=== Network Contention Experiments ==="
     for flows in "${NET_STRESS_FLOWS[@]}"; do
@@ -475,8 +507,10 @@ main() {
             sleep 10
         done
     done
-    
+    fi
+
     # Block I/O Experiments
+    if [[ " $RESOURCES " == *" block "* ]]; then
     log_info ""
     log_info "=== Block I/O Contention Experiments ==="
     for jobs in "${BIO_STRESS_JOBS[@]}"; do
@@ -485,6 +519,7 @@ main() {
             sleep 10
         done
     done
+    fi
     
     log_info ""
     log_info "========================================="

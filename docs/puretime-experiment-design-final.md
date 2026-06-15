@@ -13,12 +13,13 @@
 
 - 각 리소스(CPU, Network, Block)에 dependent한 함수 3개를 FunctionBench에서 골라 사용
   - CPU = `float`, **Block I/O = `compression`** (이전 계획의 `dd`에서 변경), Network = cloud storage **업로드**(PureTime은 송신 TX만 추적하므로 업로드 경로 사용)
-    - **block victim을 `dd`가 아니라 `compression`으로 하는 이유 (실측 확인)**: PureTime은 *스케줄러 큐 경합*을 제거하지 *장치 물리 dilation*(seek 등)은 못 뺀다(범위 밖). 순수 `dd`는 **block-only라 디스크를 포화**시켜 seek dilation이 지배 → 결과 깨짐(버퍼드 −70% 과다제거 / direct +45% 과소제거). **`compression`은 CPU+block 혼합**(파일 생성 write+fsync → 압축 read+write+fsync)이라 block 경합이 *"고갈"이 아니라 "wait-유발"* 강도에 머문다 → **보수적·안정적 ~63~68% removal**(과다제거 0). 실제 하니스(`exp_accuracy_by_type.sh`)도 `compression` 사용. (`dd`를 굳이 쓰려면 queue_depth=1 + O_DIRECT + 순차로 특수 튜닝해야 ~65~69% 비슷하게 나오지만 불안정 — 비권장.)
+    - **block victim을 `dd`가 아니라 `compression`으로 하는 이유 (실측 확인)**: PureTime은 *스케줄러 큐 경합*을 제거하지 *장치 물리 dilation*(seek 등)은 못 뺀다(범위 밖). 순수 `dd`는 **block-only라 디스크를 포화**시켜 seek dilation이 지배 → 결과 깨짐(버퍼드 −70% 과다제거 / direct +45% 과소제거). **`compression`은 CPU+block 혼합**(파일 생성 write+fsync → 압축 read+write+fsync)이라 block 경합이 *"고갈"이 아니라 "wait-유발"* 강도에 머문다(과다제거 0). 실제 하니스(`exp_accuracy_by_type.sh`)도 `compression` 사용.
+      - **★ 측정 전제조건 `queue_depth=2` (2026-06-16 K=30 실측):** 기본 NCQ `queue_depth=32`에선 경합이 issue→complete(장치 내부)에 숨어 **removal 39%만** 나온다. `echo 2 > /sys/block/sdb/device/queue_depth`로 직렬화하면 경합이 [insert→issue]로 노출되어 **removal median 83%/mean 87% @ 2.5×, nf/solo 1.24(보수적)**. depth-sweep 1→2→4→8→32 = 114%(과다제거)→83%→74→75→39%; depth=2가 sweet spot(depth=1은 과다직렬화로 과다제거). 한계: 과다제거 꼬리 ~7%(std 11pp), queue_depth knob 의존성. 하니스가 `BLOCK_QUEUE_DEPTH`(기본 2)로 설정·복원. (NIC offload off와 동일 성격의 전제조건.)
   - 각 함수는 **고정 입력**으로 실행하고, **solo run(동일 입력, 무부하)을 G.T.**로 삼음
 - 리소스에 맞는 stress 도구로 부하를 주면서 함수를 실행하고, 함수의 solo run 실행 시간과 PureTime으로 추출한 순수 실행 시간의 차이를 비교
   - stress 도구의 부하 정도를 다르게 하여, 부하 수준에 따라 정확도가 어떻게 되는지 확인
   - **stressor(별도 cgroup)**: CPU = register/L1-bound 루프(cpuburn) · Block = fsync 쓰기(BFQ) · **Network = `iperf3 -c` (TCP, 별도 level≥2 cgroup), 강도 = `-P` 병렬 flow 수.** HTB 10mbit throttle 하에서 같은 TX qdisc 경합. (`exp_accuracy_by_type.sh` `NET_STRESS_FLOWS`; 이전 "업로더 컨테이너 N개"에서 교체 — victim은 uploader 1개 그대로.) iperf3 서버 필요, **TCP만**(UDP 미추적).
-  - **실측 결과(wall ≥1.5× 의미있는 경합)**: CPU 99%@1.7× · Network 88~93%@4~5× = **≥80% removal 안정적**. **Block은 ~65~76%**(스케줄러 큐 경합만 제거; 장치 dilation은 범위 밖 — `block_rq_issue`가 dispatch 시점이라 [issue→complete] 대기 사각, ~16개 설정 실측 확정. claims-contract "최종 프레이밍 결정" 노트 참조). → 논문은 CPU·Net 강조, Block 정직 프레이밍.
+  - **실측 결과(K=30/50, 2026-06-16)**: **CPU 98%@1.0→3.1×(강도 sweep) · Network 89%@4.8× · Block 87%@2.5×** = 셋 다 ≥87%. **Block은 `queue_depth=2` 전제조건 필수**(기본 depth=32에선 경합이 [issue→complete] 장치 내부에 숨어 39%만; depth=2로 직렬화하면 [insert→issue]로 노출되어 87%). 한계 정직 명시: block 과다제거 꼬리 ~7%(std 11pp)·queue_depth knob 의존성. claims-contract "Block 결론 수정 2026-06-16" 노트 참조. → 논문 CPU·Net·Block 모두 강하게 + block limitation 명시.
 
 ### Figure
 

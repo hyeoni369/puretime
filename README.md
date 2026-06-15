@@ -17,6 +17,17 @@ sudo -i
 sudo echo mq-deadline > /sys/block/<device>/queue/scheduler
 ```
 
+#### Limit Block device's NCQ queue_depth (block 측정 정확도)
+```sh
+# 기본 queue_depth(보통 32)에선 NCQ가 다수 요청을 장치에 동시 dispatch →
+# block 경합이 [issue→complete] 장치 서비스타임에 숨어 PureTime이 ~39%만 포착.
+# queue_depth=2로 직렬화하면 경합이 [insert→issue] 스케줄러 큐로 노출 → ~87% 포착.
+cat /sys/block/<device>/device/queue_depth   # 원래 값 확인(복원용)
+sudo sh -c 'echo 2 > /sys/block/<device>/device/queue_depth'
+# 측정 후 복원: echo 32 > .../device/queue_depth
+# (exp_accuracy_by_type.sh는 BLOCK_QUEUE_DEPTH=2로 자동 설정·복원)
+```
+
 #### Setup MinIO Server (for Network Benchmark)
 Network 벤치마크 테스트를 위해 별도 서버에서 MinIO를 실행해야 합니다.
 
