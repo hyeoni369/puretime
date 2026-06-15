@@ -89,7 +89,7 @@ Intervals are stored as `portion` sets so overlaps merge automatically; the unio
 **Two analyzer copies, keep in sync:** `tests/noise_free_makespan.py` (canonical; default output = human text, `-j` = detailed `_ns` JSON) and `experiments/noise_free_makespan.py` (identical logic + fixes, default output = jq-parseable JSON array consumed by `experiments/*.sh`). Apply every analyzer change to **both**.
 
 ## Other directories
-- `funcs/` — victim workloads (compression, graph-bfs, network-uploader, thumbnailer, udp-sender, video-processing).
+- `funcs/` — victim workloads (compression, graph-bfs, network-uploader, thumbnailer, video-processing). Block victim = **compression** (CPU+block 혼합; 순수 `dd`는 디스크 포화→seek dilation으로 부적합). (`udp-sender`는 UDP라 PureTime TCP-TX 범위 밖 → 삭제됨.)
 - `experiments/` — experiment runners (`exp_accuracy_by_type.sh`, `exp_overhead_{time,resource}.sh`), figure generation (`plot_evaluation.py`), and its in-sync copy of `noise_free_makespan.py` (see the "two analyzer copies" note above — change both).
 - `libbpf/`, `bpftool/` — git submodules; `vmlinux/` — vendored per-arch `vmlinux.h` for CO-RE.
 - Build env: `flake.nix` (Nix), `dev.dockerfile` + `.devcontainer/`.
