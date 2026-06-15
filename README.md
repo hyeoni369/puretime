@@ -55,7 +55,7 @@ git submodule update --init --recursive
 
 ### **2. Install dependencies**
 
-For dependencies, it varies from distribution to distribution. You can refer to shell.nix and dockerfile for installation.
+For dependencies, it varies from distribution to distribution. You can refer to `flake.nix` and `dev.dockerfile`, or run `make install`, for installation.
 
 On Ubuntu, you may run `make install` or
 
