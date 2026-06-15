@@ -20,9 +20,12 @@ set -e
 # Configuration Variables (수정 가능)
 # =============================================================================
 
-# 노이즈 유형별 실험 컨테이너 수 (고정값 - 유형별 비교가 목적)
-CPU_CONTAINER_COUNTS=(1 2 4 8)
-BIO_CONTAINER_COUNTS=(1 5 10 15)
+# CPU noise = stress-ng CPU worker 수(register/L1 --cpu-method float, victim과 같은 코어). 0=solo(GT 기준).
+# (이전엔 graph-bfs 컨테이너 N개 상호경합 = 약함+메모리 dilation. victim은 항상 float 1개; stressor만 stress-ng.)
+CPU_STRESS_WORKERS=(0 1 2 4)
+# Block noise = fio 동시 job 수 (같은 디바이스 $HDD_MOUNT에 연속 버퍼드+fsync 쓰기 stressor). 0=solo(GT 기준).
+# (이전엔 compression 컨테이너 N개 상호경합=약함. victim은 항상 compression 1개; stressor만 fio.)
+BIO_STRESS_JOBS=(0 4)
 
 # Network noise = iperf3 stressor 강도(병렬 TCP flow 수, -P). 0=solo(stressor 없음, GT 기준).
 # (이전엔 업로더 컨테이너 수였음. victim은 항상 uploader 1개; 노이즈만 iperf3로 교체.)
@@ -283,40 +286,51 @@ ensure_testfile() {
 # =============================================================================
 
 run_cpu_experiment() {
-    local count="$1"
+    # $1 = stress-ng CPU worker 수(stressor 강도). 0이면 solo(노이즈 없음, GT 기준).
+    # victim은 항상 float 컨테이너 1개(실제 함수); 노이즈는 별도 cgroup의 호스트 stress-ng
+    # (register/L1-bound --cpu-method float → IPC dilation 누수 차단), victim과 같은 코어에 연속 핀.
+    local workers="$1"
     local iteration="$2"
-    
-    log_info "CPU experiment: $count containers, iteration $iteration"
-    
-    local cgroup_file="$OUTPUT_DIR/cgroups_cpu_${count}_${iteration}.txt"
-    
+
+    log_info "CPU experiment: stress-ng --cpu $workers (float method), iteration $iteration"
+
+    local cgroup_file="$OUTPUT_DIR/cgroups_cpu_${workers}_${iteration}.txt"
+    local stress_cg="/sys/fs/cgroup/pt_cpustress"
+
     # Start PureTime
     $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
-    
+
     local trace_file=$(get_latest_trace)
-    
-    # Start containers: register/L1-bound float victim/stressor, 단일 비-0 코어에 핀
-    # (N개가 같은 코어에서 시분할 → CPU 스케줄러 경합만; register/L1이라 캐시 dilation 없음)
-    start_containers "$FLOAT_IMAGE" "$count" "--cpuset-cpus=$CPU_PIN_CORE"
+
+    # CPU stressor: 호스트 stress-ng, register/L1-bound, victim과 같은 코어($CPU_PIN_CORE)에 핀, 연속.
+    local stress_pid=""
+    if [ "$workers" -gt 0 ]; then
+        mkdir -p "$stress_cg"
+        bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec stress-ng --cpu $workers --cpu-method float --taskset $CPU_PIN_CORE --cpu-load 100 -t $TRACE_DURATION" > /dev/null 2>&1 &
+        stress_pid=$!
+        sleep 1   # stressor 램프업 후 victim 시작
+    fi
+
+    # victim: 실제 float 함수 컨테이너 1개, 같은 코어에 핀
+    start_containers "$FLOAT_IMAGE" 1 "--cpuset-cpus=$CPU_PIN_CORE"
     save_cgroup_ids "$cgroup_file"
-    
-    # Wait for all containers to complete
     wait_containers
-    
-    # Stop PureTime
+
+    # stressor + PureTime 종료
+    if [ -n "$stress_pid" ]; then
+        kill "$stress_pid" 2>/dev/null || true
+        pkill -9 -f "stress-ng" 2>/dev/null || true
+    fi
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
-    
-    # Analyze with PureTime
+
     local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
+    save_puretime_results "$puretime_result" "cpu" "$workers" "$iteration"
 
-    # Save results to CSV
-    save_puretime_results "$puretime_result" "cpu" "$count" "$iteration"
-
-    # Cleanup
     stop_containers
+    rmdir "$stress_cg" 2>/dev/null || true
 }
 
 run_network_experiment() {
@@ -381,42 +395,52 @@ run_network_experiment() {
 }
 
 run_block_io_experiment() {
-    local count="$1"
+    # $1 = fio 동시 job 수(stressor 강도). 0이면 solo(노이즈 없음, GT 기준).
+    # victim은 항상 compression 컨테이너 1개(실제 함수); 노이즈는 별도 cgroup의 호스트 fio
+    # (같은 디바이스 $HDD_MOUNT에 연속 버퍼드+fsync 쓰기, BFQ에서 victim과 경합). blkcg로 fio cgroup에 귀속.
+    local jobs="$1"
     local iteration="$2"
-    
-    log_info "Block I/O experiment: $count containers, iteration $iteration"
-    
-    local cgroup_file="$OUTPUT_DIR/cgroups_bio_${count}_${iteration}.txt"
-    
-    # Setup I/O scheduler
+
+    log_info "Block I/O experiment: fio --numjobs $jobs, iteration $iteration"
+
+    local cgroup_file="$OUTPUT_DIR/cgroups_bio_${jobs}_${iteration}.txt"
+    local stress_cg="/sys/fs/cgroup/pt_blkstress"
+
     setup_io_scheduler
-    
-    # Start PureTime
+
     $PURETIME_BIN -v -t $TRACE_DURATION &
     local puretime_pid=$!
     sleep 2
-    
+
     local trace_file=$(get_latest_trace)
-    
-    # Start containers (with HDD mount)
-    start_containers "$COMPRESSION_IMAGE" "$count" "-v $HDD_MOUNT:/tmp"
+
+    # Block stressor: 호스트 fio, 같은 디바이스에 연속 쓰기, 별도 cgroup(root io 위임 → blkcg 귀속).
+    local stress_pid=""
+    if [ "$jobs" -gt 0 ]; then
+        mkdir -p "$stress_cg"
+        bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec fio --name=blkstress --directory=$HDD_MOUNT --rw=write --bs=1M --size=256M --numjobs=$jobs --time_based --runtime=$TRACE_DURATION --fsync=8 --direct=0 --group_reporting" > /dev/null 2>&1 &
+        stress_pid=$!
+        sleep 1
+    fi
+
+    # victim: 실제 compression 함수 컨테이너 1개 (HDD 마운트)
+    start_containers "$COMPRESSION_IMAGE" 1 "-v $HDD_MOUNT:/tmp"
     save_cgroup_ids "$cgroup_file"
-    
-    # Wait for completion
     wait_containers
-    
-    # Stop PureTime
+
+    if [ -n "$stress_pid" ]; then
+        kill "$stress_pid" 2>/dev/null || true
+        pkill -9 -f "fio --name=blkstress" 2>/dev/null || true
+    fi
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
-    
-    # Analyze
+
     local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
+    save_puretime_results "$puretime_result" "block_io" "$jobs" "$iteration"
 
-    # Save results to CSV
-    save_puretime_results "$puretime_result" "block_io" "$count" "$iteration"
-
-    # Cleanup
     stop_containers
+    rm -f "$HDD_MOUNT"/blkstress* 2>/dev/null
+    rmdir "$stress_cg" 2>/dev/null || true
     restore_io_scheduler
 }
 
@@ -436,9 +460,9 @@ main() {
     # CPU Experiments
     log_info ""
     log_info "=== CPU Contention Experiments ==="
-    for count in "${CPU_CONTAINER_COUNTS[@]}"; do
+    for workers in "${CPU_STRESS_WORKERS[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
-            run_cpu_experiment "$count" "$iter"
+            run_cpu_experiment "$workers" "$iter"
             sleep 10
         done
     done
@@ -456,9 +480,9 @@ main() {
     # Block I/O Experiments
     log_info ""
     log_info "=== Block I/O Contention Experiments ==="
-    for count in "${BIO_CONTAINER_COUNTS[@]}"; do
+    for jobs in "${BIO_STRESS_JOBS[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
-            run_block_io_experiment "$count" "$iter"
+            run_block_io_experiment "$jobs" "$iter"
             sleep 10
         done
     done
