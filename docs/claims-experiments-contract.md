@@ -67,7 +67,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 
 ### 그룹 1 — 핵심 정확도 (1-1·1-2·1-4 / C1·C2, P0·P1)
 - **증명**: 1-1 makespan이 solo 대비 오차 E% 이내(C1) · 1-2 breakdown↔주입 유형 일치(C2) · 1-4 강도 올려도 정확도 유지. **셋을 단일-노이즈 한 측정 세트에서 동시 추출**(중복 측정 X).
-- **victim 4종**: `float`(CPU) · `dd`(block I/O) · cloud storage **업로드**(network — TX만 보이므로 업로드 경로) · video_processing(다자원).
+- **victim 4종**: `float`(CPU) · **`compression`(block I/O — 이전 `dd`에서 변경; CPU+block 혼합이라 디스크 *포화/seek dilation* 회피, wait-유발 경합 유지)** · cloud storage **업로드**(network — TX만 보이므로 업로드 경로) · video_processing(다자원).
 - **단일 노이즈**: victim별 해당 자원 노이즈 1종 + video는 3종 각각.
 - **강도(1-4)**: 약/중/강 3단계, 대표 victim 1~2개에만. 나머지는 중간 강도 1개로 1-1·1-2만. (전부 돌리고 잘 나오는 것만 본문.)
 - **반복·G.T.**: K=50, solo는 victim당 50회 1회. G.T.=solo 분포.

@@ -12,7 +12,8 @@
 ### 실험 방법
 
 - 각 리소스(CPU, Network, Block)에 dependent한 함수 3개를 FunctionBench에서 골라 사용
-  - CPU = `float`, Block I/O = `dd`, Network = cloud storage **업로드**(PureTime은 송신 TX만 추적하므로 업로드 경로 사용)
+  - CPU = `float`, **Block I/O = `compression`** (이전 계획의 `dd`에서 변경), Network = cloud storage **업로드**(PureTime은 송신 TX만 추적하므로 업로드 경로 사용)
+    - **block victim을 `dd`가 아니라 `compression`으로 하는 이유 (실측 확인)**: PureTime은 *스케줄러 큐 경합*을 제거하지 *장치 물리 dilation*(seek 등)은 못 뺀다(범위 밖). 순수 `dd`는 **block-only라 디스크를 포화**시켜 seek dilation이 지배 → 결과 깨짐(버퍼드 −70% 과다제거 / direct +45% 과소제거). **`compression`은 CPU+block 혼합**(파일 생성 write+fsync → 압축 read+write+fsync)이라 block 경합이 *"고갈"이 아니라 "wait-유발"* 강도에 머문다 → **보수적·안정적 ~63~68% removal**(과다제거 0). 실제 하니스(`exp_accuracy_by_type.sh`)도 `compression` 사용. (`dd`를 굳이 쓰려면 queue_depth=1 + O_DIRECT + 순차로 특수 튜닝해야 ~65~69% 비슷하게 나오지만 불안정 — 비권장.)
   - 각 함수는 **고정 입력**으로 실행하고, **solo run(동일 입력, 무부하)을 G.T.**로 삼음
 - 리소스에 맞는 stress 도구로 부하를 주면서 함수를 실행하고, 함수의 solo run 실행 시간과 PureTime으로 추출한 순수 실행 시간의 차이를 비교
   - stress 도구의 부하 정도를 다르게 하여, 부하 수준에 따라 정확도가 어떻게 되는지 확인

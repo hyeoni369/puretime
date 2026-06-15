@@ -103,7 +103,7 @@
 ## 7. 실험 셋업 (재현용)
 
 - **공통**: cgroup v2 격리 컨테이너로 서버리스 함수 실행 재현(Knative 미배포). core 0 제외 + victim/stressor 코어 핀. victim 단일 스레드. solo run 분포 = G.T. K=50 반복. 판정 = 분포 겹침/2-표본 검정.
-- **victim**: CPU=`float`(sqrt/sin/cos 루프) · Network=cloud storage 업로드(MinIO, TCP) · Block=`dd`/compression · 다자원=video_processing.
+- **victim**: CPU=`float`(sqrt/sin/cos 루프) · Network=cloud storage 업로드(MinIO, TCP) · **Block=`compression`**(write+fsync→압축; CPU+block 혼합이라 디스크 경합이 *wait-유발* 강도에 머묾. 순수 `dd`는 디스크 *포화*→seek dilation(범위 밖)으로 부적합) · 다자원=video_processing.
 - **stressor(각 별도 cgroup)**: CPU=register/L1 루프 · Network=`iperf3 -c`(TCP, level≥2 cgroup, 강도=`-P` flow 수, HTB 10mbit+fq_codel throttle, iperf3 서버 필요) · Block=fsync 쓰기(같은 디바이스, BFQ).
 - **선결 조건**: NIC offload off(`ethtool -K`); 블록 스케줄러 `[none]` 금지(mq-deadline/bfq); 네트워크는 MinIO + `uploads` 버킷.
 - **실행**: `make build` → `sudo src/puretime -v -t N` → `python3 tests/noise_free_makespan.py <trace> -j`. 실험 하니스: `experiments/exp_accuracy_by_type.sh`(CPU/Net/Block accuracy sweep).
