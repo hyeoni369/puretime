@@ -29,8 +29,8 @@ BIO_CONTAINER_COUNTS=(1 5 10 15)
 # 강도 sweep상 -P 4(≈5 flow)가 sweet spot(removal ~88%). iperf3 서버가 $MINIO_IP:5201에 떠 있어야 함.
 NET_STRESS_FLOWS=(0 4)
 
-# 반복 실험 횟수
-ITERATIONS=100
+# 반복 실험 횟수 (설계 K=50; 파일럿은 ITERATIONS=2 등 env로 오버라이드)
+ITERATIONS="${ITERATIONS:-50}"
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
 TRACE_DURATION=180
@@ -48,9 +48,13 @@ OUTPUT_DIR="${1:-/tmp/puretime_exp_type_$(date +%Y%m%d_%H%M%S)}"
 RESULTS_FILE="$OUTPUT_DIR/results.csv"
 
 # Docker image names
-GRAPH_BFS_IMAGE="graph-bfs"
+FLOAT_IMAGE="float"                 # CPU victim/stressor = register/L1-bound (설계 요구; graph-bfs 대체)
+GRAPH_BFS_IMAGE="graph-bfs"         # (오버헤드 실험용으로만 유지; 정확도 CPU 실험엔 미사용)
 NETWORK_UPLOADER_IMAGE="network-uploader"
 COMPRESSION_IMAGE="compression"
+
+# CPU 실험 핀 코어 (설계: core 0 제외 → 비-0 단일 코어에 victim+stressor 핀)
+CPU_PIN_CORE=2
 
 # Network/Block I/O 설정
 TESTFILE_PATH="/data/tmp.bin"
@@ -97,6 +101,7 @@ check_prerequisites() {
     
     # Build Docker images if needed
     log_info "Building Docker images..."
+    docker build -t "$FLOAT_IMAGE" "$PURETIME_DIR/funcs/float" > /dev/null 2>&1
     docker build -t "$GRAPH_BFS_IMAGE" "$PURETIME_DIR/funcs/graph-bfs" > /dev/null 2>&1
     docker build -t "$NETWORK_UPLOADER_IMAGE" "$PURETIME_DIR/funcs/network-uploader" > /dev/null 2>&1
     docker build -t "$COMPRESSION_IMAGE" "$PURETIME_DIR/funcs/compression" > /dev/null 2>&1
@@ -292,8 +297,9 @@ run_cpu_experiment() {
     
     local trace_file=$(get_latest_trace)
     
-    # Start containers (CPU pinned to core 0)
-    start_containers "$GRAPH_BFS_IMAGE" "$count" "--cpuset-cpus=0"
+    # Start containers: register/L1-bound float victim/stressor, 단일 비-0 코어에 핀
+    # (N개가 같은 코어에서 시분할 → CPU 스케줄러 경합만; register/L1이라 캐시 dilation 없음)
+    start_containers "$FLOAT_IMAGE" "$count" "--cpuset-cpus=$CPU_PIN_CORE"
     save_cgroup_ids "$cgroup_file"
     
     # Wait for all containers to complete
