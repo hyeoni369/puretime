@@ -70,7 +70,7 @@
 
 ## 5. 검증 결과 (현 코드 실측, 보수적)
 
-> 판정 기준: **wall이 ≥1.5배 늘어나는 의미있는 경합**에서의 removal(= 제거된 노이즈 / 전체 노이즈). solo run = G.T. CPU·Network는 noise_free ≥ solo(과다제거 0); **Block(queue_depth=2)은 median nf/solo=1.24로 대체로 보수적이나 30런 중 ~2런 과다제거(nf<solo, max removal 119%)** — 직렬화 측정의 잔여 한계.
+> 판정 기준: **wall이 ≥1.5배 늘어나는 의미있는 경합**에서의 removal(= 제거된 노이즈 / 전체 노이즈). solo run = G.T. CPU·Network는 noise_free ≥ solo(과다제거 0); **Block(queue_depth=2 + store victim)은 median nf/solo=1.17로 대체로 보수적이나 30런 중 4런 과다제거(nf<solo, max removal 107%)** — 직렬화 측정의 잔여 한계.
 
 > K=30/50 E2E(2026-06-16). nf/solo = noise_free ÷ solo(GT); 1.0이 이상, >1.0은 보수적(과소제거).
 
@@ -78,11 +78,11 @@
 |---|---|---|---|---|
 | **CPU** | **98%** | 1.0→3.1× (강도 sweep) | register/L1 `float`, 동일코어 핀, N개 별도 cgroup | 1.05 |
 | **Network** | **89%** | 4.8× | iperf3 `-c -P4` (TCP), HTB 10mbit throttle | 1.44 |
-| **Block** | **87%** (median 83%) | 2.5× | fsync 쓰기(compression), BFQ + **queue_depth=2** | 1.24 |
+| **Block** | **92%** | 3.2× | archiving (compression **store 모드**, I/O-bound), BFQ + **queue_depth=2** | 1.17 |
 
 - **CPU**: 무경합 baseline 오차 −0.05%. register/L1 stressor에서 +2.6%/99%. (cache/membw 오염 stressor면 +8.3%로 오차 부풀음 — IPC dilation 누수, 범위 밖.)
 - **Network**: 강도(iperf3 `-P` flow 수)에 비례해 removal 상승(2 flow ~50% → 8 flow ~86%). 잔여는 TCP 혼잡 백오프(범위 밖).
-- **Block**: 스케줄러 큐([insert→issue]) 경합 제거. **`queue_depth=2` 전제조건 필수** — 기본 NCQ depth=32에선 경합이 [issue→complete] 장치 내부에 숨어 39%만; depth=2로 직렬화하면 큐잉으로 노출되어 87%. 잔여는 장치 레벨 dilation + 직렬화 과다제거 꼬리(범위 밖/한계).
+- **Block**: 스케줄러 큐([insert→issue]) 경합 제거. **`queue_depth=2` 전제조건 + store-모드 I/O-bound victim** — 기본 NCQ depth=32에선 경합이 [issue→complete] 장치 내부에 숨어 39%만; depth=2로 직렬화하면 큐잉으로 노출되어 92%. victim은 store 모드(zip 무압축 archiving)라 makespan이 I/O로 채워져 inflation 3.2×·removal 92%(CPU-heavy DEFLATE는 2.5×/87%였음). 잔여는 장치 레벨 dilation + 직렬화 과다제거 꼬리(범위 밖/한계).
 - 드롭 감지·거부: 실제 ring buffer 오버플로(5975만 drop)로 end-to-end 확인.
 
 **오버헤드**: online(eBPF 훅 + Loader 캡처)만 해당. Analyzer는 offline(critical path 밖). 측정 시 ring buffer 32MB로 빌드(RSS ~70MB).
@@ -95,7 +95,7 @@
 - **on-CPU IPC dilation**(LLC·메모리 대역폭 경합으로 victim 자기 명령어가 느려짐) = **범위 밖.** → CPU stressor는 register/L1-bound로 유지.
 - **Network = TCP-TX 전용**(tcp_sendmsg 등록 TCP 송신만; UDP·RX 미지원). **TCP 혼잡 백오프**(소켓 버퍼 대기, qdisc 이전)는 net_dev 훅 사각 = **범위 밖.**
 - **Block**: io 컨트롤러를 컨테이너 cgroup에 위임해야 blkcg 귀속(미위임 시 current-cgroup fallback). **장치 레벨 dilation**(HDD seek, NCQ 재정렬) = **범위 밖.**
-  - 구조적 이유: `block_rq_issue`는 "드라이버 dispatch" 시점에 찍혀 모델이 [insert→issue](스케줄러 큐 대기)만 봄. 경합 대기는 NCQ depth가 크면 그 뒤 [issue→complete](장치 내부)에 숨어 사각 → 기본 depth=32에선 block removal 39%. **해결(2026-06-16): `queue_depth=2`로 장치를 직렬화하면 경합이 [insert→issue]로 다시 노출되어 sound한 큐잉 모델로 잡힌다 → 87%.** 즉 config(queue_depth)로 *일부* 푼다 — 단, 직렬화 과다제거 꼬리(~7%)·knob 의존성은 한계로 남음. (issue→complete를 직접 켜는 건 단일서버 과다제거로 폐기 = BIO-2. future work: per-cgroup `io.stat` 기반.)
+  - 구조적 이유: `block_rq_issue`는 "드라이버 dispatch" 시점에 찍혀 모델이 [insert→issue](스케줄러 큐 대기)만 봄. 경합 대기는 NCQ depth가 크면 그 뒤 [issue→complete](장치 내부)에 숨어 사각 → 기본 depth=32에선 block removal 39%. **해결(2026-06-16): `queue_depth=2`로 장치를 직렬화하면 경합이 [insert→issue]로 다시 노출되어 sound한 큐잉 모델로 잡힌다 + victim을 store-모드 I/O-bound로 → 92%.** 즉 config(queue_depth)+victim I/O비율로 *일부* 푼다 — 단, 직렬화 과다제거 꼬리(~13%, 4/30)·knob 의존성은 한계로 남음. (issue→complete를 직접 켜는 건 단일서버 과다제거로 폐기 = BIO-2. future work: per-cgroup `io.stat` 기반.)
 - **CPU wait 모델 = 단일코어 핀 가정**(cross-CPU 마이그레이션 미추적).
 - **sequential execution 가정**: victim은 단일 스레드(I/O 대기 중 다른 로직 미실행).
 - **"노이즈를 전부 제거"라고 쓰지 말 것.** 각 자원의 범위-밖 dilation은 잔여로 남으며, 이는 의도적(보수적, "실제보다 빠르다고 과장 안 함").
@@ -105,7 +105,7 @@
 ## 7. 실험 셋업 (재현용)
 
 - **공통**: cgroup v2 격리 컨테이너로 서버리스 함수 실행 재현(Knative 미배포). core 0 제외 + victim/stressor 코어 핀. victim 단일 스레드. solo run 분포 = G.T. K=50 반복. 판정 = 분포 겹침/2-표본 검정.
-- **victim**: CPU=`float`(sqrt/sin/cos 루프) · Network=cloud storage 업로드(MinIO, TCP) · **Block=`compression`**(write+fsync→압축; CPU+block 혼합이라 디스크 경합이 *wait-유발* 강도에 머묾. 순수 `dd`는 디스크 *포화*→seek dilation(범위 밖)으로 부적합) · 다자원=video_processing.
+- **victim**: CPU=`float`(sqrt/sin/cos 루프) · Network=cloud storage 업로드(MinIO, TCP) · **Block=`compression` store 모드**(zip 무압축 archiving = write+fsync→read+write+fsync, I/O-bound; queue_depth=2가 포화/seek dilation을 막아 안전. DEFLATE/순수 dd에서 진화) · 다자원=video_processing.
 - **stressor(각 별도 cgroup)**: CPU=register/L1 루프 · Network=`iperf3 -c`(TCP, level≥2 cgroup, 강도=`-P` flow 수, HTB 10mbit+fq_codel throttle, iperf3 서버 필요) · Block=fsync 쓰기(같은 디바이스, BFQ).
 - **선결 조건**: NIC offload off(`ethtool -K`); 블록 스케줄러 `[none]` 금지(mq-deadline/bfq); 네트워크는 MinIO + `uploads` 버킷.
 - **실행**: `make build` → `sudo src/puretime -v -t N` → `python3 tests/noise_free_makespan.py <trace> -j`. 실험 하니스: `experiments/exp_accuracy_by_type.sh`(CPU/Net/Block accuracy sweep).

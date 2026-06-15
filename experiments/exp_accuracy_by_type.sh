@@ -238,7 +238,7 @@ BLOCK_DEVICE=""
 ORIGINAL_SCHEDULER=""
 ORIGINAL_QUEUE_DEPTH=""
 # block 측정 전제조건: NCQ depth를 낮춰 경합을 OS 큐(insert→issue)로 노출.
-# depth=2 → noise_free가 solo를 복원(removal~96%); depth=1은 완전직렬화로 과다제거(nf<solo);
+# depth=2 → noise_free가 solo를 복원(K=30 store-victim removal~92%, nf/solo 1.17); depth=1은 완전직렬화로 과다제거(nf<solo);
 # depth=32(기본)은 경합이 디바이스 내부(issue→complete)에 숨어 과소포착(removal~39%).
 BLOCK_QUEUE_DEPTH="${BLOCK_QUEUE_DEPTH:-2}"
 

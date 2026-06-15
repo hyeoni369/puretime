@@ -5,6 +5,7 @@ import os
 import time
 import json
 import shutil
+import zipfile
 
 
 def generate_input_files(data_dir: str, num_files: int, file_size_mb: int):
@@ -21,12 +22,16 @@ def generate_input_files(data_dir: str, num_files: int, file_size_mb: int):
 
 
 def compress_directory(input_dir: str, output_path: str) -> int:
-    """Compress directory to ZIP archive"""
-    archive_path = shutil.make_archive(
-        output_path.replace('.zip', ''),
-        'zip',
-        input_dir
-    )
+    """Archive directory to ZIP. COMPRESS_METHOD=stored → 무압축(I/O-bound, CPU 최소);
+    'deflate'(기본) → DEFLATE(CPU-heavy). I/O 비율을 키워 block inflation을 높이려면 stored."""
+    method = (zipfile.ZIP_STORED if os.environ.get('COMPRESS_METHOD', 'deflate') == 'stored'
+              else zipfile.ZIP_DEFLATED)
+    archive_path = output_path if output_path.endswith('.zip') else output_path + '.zip'
+    with zipfile.ZipFile(archive_path, 'w', method) as zf:
+        for root, _, files in os.walk(input_dir):
+            for name in files:
+                fp = os.path.join(root, name)
+                zf.write(fp, os.path.relpath(fp, input_dir))
     # Force sync to disk
     with open(archive_path, 'r+b') as f:
         os.fsync(f.fileno())
