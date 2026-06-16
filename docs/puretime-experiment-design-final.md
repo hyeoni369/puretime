@@ -43,6 +43,12 @@
 - 리소스 간에 서로 얼마나 겹치는지에 따른 순수 실행 시간 성능을 with / without interval-merge 관점에서 분석
   - mixed noise에서 순수 실행 시간이 solo와 맞는 것 = 정확성 + merge 기여를 동시에 보임
 
+### ★ 실측 발견 (2026-06-16, WIP — `exp_mixed_noise.sh` + 재작성 video victim)
+
+- **net-TX 경합은 interval-merge에 못 쓴다 (구조적):** throttle+iperf3로 업로드를 포화시키면 inflation의 대부분이 **TCP 혼잡 백오프(소켓버퍼 대기, qdisc 이전 = PureTime 범위 밖, contract "network 잔여" 노트 참조)**라 `wait_net≈0`이고, 그게 makespan을 지배(nf/solo 5.9~10.8×, removal ~5%) → merge가 union할 net 구간이 없다.
+- **→ CPU+Block 겹침으로 피벗:** 둘 다 견고하게 포착되고, **grayscale 단계(read+CPU+write)에서 CPU-wait와 Block-wait이 async writeback으로 시간상 겹친다**. victim도 그에 맞춰 `UPLOAD=0`(net 제거) + `GRAYSCALE_PASSES`로 CPU+Block을 makespan 지배로. harness 기본 `STRESS="cpu block"`.
+- **미완:** CPU+Block 파일럿에서 **merged < naive(겹침 이중차감)** 가 유의하게 나오는지 아직 미실증(파일럿 crash, `set -e`→`set +e` 수정함). 다음: 재파일럿 → 유의하면 풀런+plotter(겹침비율 x축, merge vs naive vs solo), 아니면 victim CPU/Block·겹침 튜닝. 나머지 실험(1·3·4·5)은 완료.
+
 ---
 
 ## 실험 3. Input-variance한 함수에서 PureTime이 얼마나 잘 작동하는가?
