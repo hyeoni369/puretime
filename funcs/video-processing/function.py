@@ -1,129 +1,107 @@
 #!/usr/bin/env python3
-"""Video Processing - Multi-resource benchmark adapted from SeBS"""
+"""Video processing — multi-resource victim (Experiment 2, interval-merge / C3).
 
+Single-threaded, blocking. Exercises the three PureTime-tracked resources so their
+co-tenant wait intervals OVERLAP in time (which is what interval-merge must handle):
+  - generate a synthetic input video      → CPU + Block(write)
+  - OpenCV grayscale conversion            → Block(read) + CPU + Block(write)
+  - upload the grayscale result to MinIO   → Net-TX (+ Block read of the file)
+
+VIDEO_FRAMES / FRAME_W / FRAME_H tune the workload size, which adjusts how much the
+per-resource wait intervals overlap (the x-axis of the merge-vs-naive figure).
+"""
 import os
 import time
 import json
-import subprocess
-import urllib.request
+import cv2
+import numpy as np
 
-# Sample video URLs (public domain / CC0)
-SAMPLE_VIDEOS = [
-    "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_5MB.mp4",
-    "https://www.w3schools.com/html/mov_bbb.mp4",
-]
+cv2.setNumThreads(1)  # single-thread (design: single-threaded victim)
 
-
-def download_video(url: str, output_path: str) -> int:
-    """Download video from URL"""
-    print(f"Downloading video from {url} to {output_path}")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=60) as response:
-        data = response.read()
-        with open(output_path, 'wb') as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-    return len(data)
+FRAMES = int(os.environ.get("VIDEO_FRAMES", "300"))
+W = int(os.environ.get("FRAME_W", "640"))
+H = int(os.environ.get("FRAME_H", "480"))
+WORK = os.environ.get("WORK_DIR", "/tmp/video_test")
+MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://165.194.27.225:9000")
+MINIO_AK = os.environ.get("MINIO_ACCESS_KEY", "minioadmincslab")
+MINIO_SK = os.environ.get("MINIO_SECRET_KEY", "minioadmincslab")
+BUCKET = os.environ.get("MINIO_BUCKET", "uploads")
 
 
-def video_to_gif(input_path: str, output_path: str, fps: int = 10, width: int = 320):
-    """Convert video to GIF using ffmpeg"""
-    # Generate palette for better quality
-    palette_path = input_path + ".palette.png"
-
-    # Step 1: Generate palette
-    subprocess.run([
-        'ffmpeg', '-y', '-i', input_path,
-        '-vf', f'fps={fps},scale={width}:-1:flags=lanczos,palettegen',
-        palette_path
-    ], capture_output=True, check=True)
-
-    # Step 2: Create GIF with palette
-    subprocess.run([
-        'ffmpeg', '-y', '-i', input_path, '-i', palette_path,
-        '-lavfi', f'fps={fps},scale={width}:-1:flags=lanczos[x];[x][1:v]paletteuse',
-        output_path
-    ], capture_output=True, check=True)
-
-    # Cleanup palette
-    os.remove(palette_path)
-
-    # Sync to disk
-    with open(output_path, 'r+b') as f:
+def generate_input(path):
+    """Synthetic input video (deterministic) → CPU + Block(write)."""
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    vw = cv2.VideoWriter(path, fourcc, 30, (W, H))
+    rng = np.random.RandomState(0)
+    base = rng.randint(0, 255, (H, W, 3), dtype=np.uint8)
+    for i in range(FRAMES):
+        frame = np.roll(base, i * 3, axis=1)  # cheap per-frame change (deterministic)
+        vw.write(frame)
+    vw.release()
+    with open(path, "r+b") as f:
         os.fsync(f.fileno())
+    return os.path.getsize(path)
 
-    return os.path.getsize(output_path)
 
-
-def add_watermark(input_path: str, output_path: str, text: str = "PureTime"):
-    """Add text watermark to video using ffmpeg"""
-    subprocess.run([
-        'ffmpeg', '-y', '-i', input_path,
-        '-vf', f"drawtext=text='{text}':fontsize=24:fontcolor=white:x=10:y=10",
-        '-codec:a', 'copy',
-        output_path
-    ], capture_output=True, check=True)
-
-    # Sync to disk
-    with open(output_path, 'r+b') as f:
+def to_grayscale(src, dst):
+    """Read → grayscale → write → Block(read) + CPU + Block(write)."""
+    cap = cv2.VideoCapture(src)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    vw = cv2.VideoWriter(dst, fourcc, 30, (W, H), isColor=False)
+    n = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        vw.write(gray)
+        n += 1
+    cap.release()
+    vw.release()
+    with open(dst, "r+b") as f:
         os.fsync(f.fileno())
+    return n, os.path.getsize(dst)
 
-    return os.path.getsize(output_path)
+
+def upload(path, key):
+    """Upload to MinIO → Net-TX."""
+    import boto3
+    from botocore.client import Config
+    s3 = boto3.client("s3", endpoint_url=MINIO_ENDPOINT,
+                      aws_access_key_id=MINIO_AK, aws_secret_access_key=MINIO_SK,
+                      config=Config(signature_version="s3v4"), region_name="us-east-1")
+    t = time.perf_counter()
+    s3.upload_file(path, BUCKET, key)
+    return round((time.perf_counter() - t) * 1000, 2)
 
 
 def main():
-    # Configuration
-    iterations = int(os.environ.get('ITERATIONS', '3'))
-    operation = os.environ.get('OPERATION', 'gif')  # 'gif' or 'watermark'
-    work_dir = os.environ.get('WORK_DIR', '/tmp/video_test')
-    video_url = os.environ.get('VIDEO_URL', SAMPLE_VIDEOS[0])
+    os.makedirs(WORK, exist_ok=True)
+    src = os.path.join(WORK, "input.mp4")
+    dst = os.path.join(WORK, "gray.mp4")
+    t0 = time.perf_counter()
 
-    results = []
-    total_start = time.perf_counter()
+    passes = int(os.environ.get("GRAYSCALE_PASSES", "1"))
+    do_upload = os.environ.get("UPLOAD", "1") != "0"
 
-    for i in range(iterations):
-        iter_start = time.perf_counter()
+    gen_t = time.perf_counter(); in_sz = generate_input(src); gen_ms = (time.perf_counter() - gen_t) * 1000
+    # grayscale (read+CPU+write) — repeated PASSES times to make CPU+Block the dominant,
+    # overlapping work (Exp2 interval-merge demonstrates CPU∩Block overlap; net upload is
+    # out-of-scope TCP backoff so it is optional / not the merge driver).
+    proc_t = time.perf_counter()
+    nframes = out_sz = 0
+    for p in range(passes):
+        nframes, out_sz = to_grayscale(src, os.path.join(WORK, f"gray_{p}.mp4"))
+    proc_ms = (time.perf_counter() - proc_t) * 1000
+    dst = os.path.join(WORK, f"gray_{passes - 1}.mp4")
+    up_ms = upload(dst, f"gray_{os.getpid()}.mp4") if do_upload else 0.0
 
-        input_path = os.path.join(work_dir, f"input_{i}.mp4")
-
-        if operation == 'gif':
-            output_path = os.path.join(work_dir, f"output_{i}.gif")
-        else:
-            output_path = os.path.join(work_dir, f"output_{i}.mp4")
-
-        # Phase 1: Download (Network I/O)
-        download_start = time.perf_counter()
-        input_size = download_video(video_url, input_path)
-        download_time = time.perf_counter() - download_start
-
-        # Phase 2: Process (CPU + I/O)
-        process_start = time.perf_counter()
-        if operation == 'gif':
-            output_size = video_to_gif(input_path, output_path)
-        else:
-            output_size = add_watermark(input_path, output_path)
-        process_time = time.perf_counter() - process_start
-
-        iter_time = time.perf_counter() - iter_start
-
-        results.append({
-            'iteration': i + 1,
-            'download_time_ms': round(download_time * 1000, 2),
-            'process_time_ms': round(process_time * 1000, 2),
-            'total_time_ms': round(iter_time * 1000, 2),
-            'input_size_bytes': input_size,
-            'output_size_bytes': output_size
-        })
-
-    total_time = time.perf_counter() - total_start
-
+    total_ms = (time.perf_counter() - t0) * 1000
     print(json.dumps({
-        'iterations': iterations,
-        'operation': operation,
-        'total_elapsed_ms': round(total_time * 1000, 2),
-        'results': results
+        "frames": nframes, "resolution": f"{W}x{H}",
+        "generate_ms": round(gen_ms, 2), "grayscale_ms": round(proc_ms, 2),
+        "upload_ms": up_ms, "total_ms": round(total_ms, 2),
+        "input_bytes": in_sz, "output_bytes": out_sz,
     }))
 
 
