@@ -45,9 +45,8 @@
 
 ### ★ 실측 발견 (2026-06-16, WIP — `exp_mixed_noise.sh` + 재작성 video victim)
 
-- **net-TX 경합은 interval-merge에 못 쓴다 (구조적):** throttle+iperf3로 업로드를 포화시키면 inflation의 대부분이 **TCP 혼잡 백오프(소켓버퍼 대기, qdisc 이전 = PureTime 범위 밖, contract "network 잔여" 노트 참조)**라 `wait_net≈0`이고, 그게 makespan을 지배(nf/solo 5.9~10.8×, removal ~5%) → merge가 union할 net 구간이 없다.
-- **→ CPU+Block 겹침으로 피벗:** 둘 다 견고하게 포착되고, **grayscale 단계(read+CPU+write)에서 CPU-wait와 Block-wait이 async writeback으로 시간상 겹친다**. victim도 그에 맞춰 `UPLOAD=0`(net 제거) + `GRAYSCALE_PASSES`로 CPU+Block을 makespan 지배로. harness 기본 `STRESS="cpu block"`.
-- **미완:** CPU+Block 파일럿에서 **merged < naive(겹침 이중차감)** 가 유의하게 나오는지 아직 미실증(파일럿 crash, `set -e`→`set +e` 수정함). 다음: 재파일럿 → 유의하면 풀런+plotter(겹침비율 x축, merge vs naive vs solo), 아니면 victim CPU/Block·겹침 튜닝. 나머지 실험(1·3·4·5)은 완료.
+- **(정정) net은 잘 잡힌다 — 이전 "net 범위 밖" 진단은 오진(하니스 버그)이었다:** video victim을 `--network=host`로 실행하면 TX가 throttle 걸린 물리 iface qdisc에 직접 올라가 **wait_net이 포착된다 (net-only stress 실측: wait_net 35s, removal ~90% — 실험 1의 89%와 일치)**. 처음 파일럿에서 `wait_net≈0`이었던 건 (1) victim이 **bridge/NAT networking**이라 net_dev↔socket cgroup 연결이 깨졌고, (2) victim을 **CPU-stress 코어에 핀**해 업로드가 CPU 굶주림이었기 때문. 둘 다 수정(`start_victim`: `--network=host` + cpu가 stress일 때만 핀). TCP 백오프는 실험 1에서도 있던 ~11% 잔차(nf/solo 1.44)일 뿐 주원인 아님.
+- **남은 진짜 과제(미완):** interval-merge는 **둘 이상 자원의 wait이 시간상 겹칠 때** 의미가 있다 → `merged < naive`(겹침 이중차감)가 유의하게 나오는 **조합·victim 설정을 실측으로 찾기**. 긴장점: CPU 경합엔 victim을 포화 코어에 핀해야 하는데 그러면 net/block이 굶으니, gentle CPU 경합 또는 Net+Block 조합 등으로 겹침을 만들어야 한다. 그 뒤 풀런 + plotter(겹침비율 x축, merge vs naive vs solo). 나머지 실험(1·3·4·5)은 완료.
 
 ---
 

@@ -8,19 +8,22 @@
 # 이중차감→over-subtract)를 둘 다 출력. 영상 크기(FRAMES)로 겹침 비율 조절.
 #
 # ⚠ WIP (2026-06-16): 실험 2 미완성. 알게 된 것:
-#   - net-TX 경합은 throttle 포화 시 TCP 혼잡 백오프(소켓버퍼, qdisc 이전 = PureTime 범위 밖)라
-#     wait_net≈0 → interval-merge에 기여 못 함 → STRESS 기본을 cpu+block으로 피벗.
-#   - 남은 일: (a) CPU+Block 파일럿에서 merged<naive(겹침 이중차감)가 유의하게 나오는지 실증,
-#     (b) 안 나오면 GRAYSCALE_PASSES/FRAMES로 CPU·Block 겹침 튜닝, (c) plotter.
+#   - net은 잘 잡힌다(실측 정정). victim이 `--network=host`면 TX가 throttle 물리 iface qdisc에
+#     올라가 wait_net 포착(net-only stress: wait_net 35s, removal ~90% — 실험1 89%와 일치).
+#     [이전에 "net 범위 밖"으로 오진했던 건 하니스 버그였음: (1) bridge/NAT networking →
+#     net_dev↔socket cgroup 연결 깨짐, (2) victim을 CPU-stress 코어에 핀 → 업로드 CPU 굶주림.
+#     둘 다 수정(start_victim: --network=host + cpu가 stress일 때만 핀).]
+#   - 남은 일(진짜 과제): 자원 wait이 *겹치는* 조합·victim 설정 찾기 → merged<naive 실증.
+#     CPU 경합엔 victim을 포화 코어에 핀해야 하는데 그러면 net/block이 굶으니, 멀티자원 겹침은
+#     gentle CPU 경합 또는 Net+Block 조합 등으로 설계 재고 필요. 그 뒤 풀런 + plotter.
 #   - set -e는 stress run의 fallible 명령(pkill 등)에서 조기종료 유발 → set +e로 변경.
 # =============================================================================
 set +e
 
 FRAMES_LEVELS=(${FRAMES_LEVELS:-150 300 600 1000})
-# interval-merge는 견고하게 포착되는 자원의 겹침으로 실증한다. net-TX 경합은 throttle 포화 시
-# TCP 혼잡 백오프(소켓버퍼, qdisc 이전 = 범위 밖)라 wait_net≈0 → merge에 기여 못 함(실측 확인).
-# 따라서 STRESS 기본 = cpu+block (grayscale 단계에서 CPU-wait↔Block-wait이 async writeback으로 겹침).
-STRESS="${STRESS:-cpu block}"            # 동시에 켤 자원 부분집합
+# STRESS = 동시에 켤 자원 부분집합. net도 사용 가능(--network=host 전제). interval-merge는 이 중
+# 둘 이상의 wait이 시간상 겹칠 때 의미 — 겹침 나오는 조합을 실측으로 찾는 중(WIP).
+STRESS="${STRESS:-cpu block}"            # 기본값(잠정); net 포함 조합도 시도 예정
 GRAYSCALE_PASSES="${GRAYSCALE_PASSES:-5}"  # grayscale 반복 → CPU+Block을 makespan 지배로
 ITERATIONS="${ITERATIONS:-10}"
 CPU_STRESS_WORKERS="${CPU_STRESS_WORKERS:-3}"
@@ -117,9 +120,14 @@ stop_stressors() {
 }
 
 start_victim() {  # $1=frames
-    CID=$(docker run -d --cpuset-cpus=$CPU_PIN_CORE -v "$HDD_MOUNT":/tmp/video_test \
+    # --network=host: TX 패킷이 throttle 걸린 물리 iface qdisc에 직접 올라가 net wait이
+    #   victim cgroup에 귀속된다(bridge/NAT면 net_dev↔socket cgroup 연결이 깨져 wait_net=0).
+    # CPU 핀: cpu가 stress에 있을 때만(fully-saturated 코어에 핀하면 net/block 작업이 CPU 굶주림).
+    local pin=""
+    [[ " $STRESS " == *" cpu "* ]] && pin="--cpuset-cpus=$CPU_PIN_CORE"
+    CID=$(docker run -d --network=host $pin -v "$HDD_MOUNT":/tmp/video_test \
         -e VIDEO_FRAMES="$1" -e FRAME_W=$FRAME_W -e FRAME_H=$FRAME_H \
-        -e UPLOAD=0 -e GRAYSCALE_PASSES="$GRAYSCALE_PASSES" "$VIDEO_IMAGE")
+        -e UPLOAD="${UPLOAD_VICTIM:-1}" -e GRAYSCALE_PASSES="$GRAYSCALE_PASSES" "$VIDEO_IMAGE")
     local pid=$(docker inspect --format '{{.State.Pid}}' "$CID")
     local cg=$(cat /proc/$pid/cgroup | grep -oP '0::/\K.*')
     CGID=$(stat -c %i "/sys/fs/cgroup/${cg}")
