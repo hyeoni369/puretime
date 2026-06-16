@@ -20,14 +20,20 @@
 # =============================================================================
 set +e
 
-FRAMES_LEVELS=(${FRAMES_LEVELS:-150 300 600 1000})
-# STRESS = 동시에 켤 자원 부분집합. net도 사용 가능(--network=host 전제). interval-merge는 이 중
-# 둘 이상의 wait이 시간상 겹칠 때 의미 — 겹침 나오는 조합을 실측으로 찾는 중(WIP).
-STRESS="${STRESS:-cpu block}"            # 기본값(잠정); net 포함 조합도 시도 예정
-GRAYSCALE_PASSES="${GRAYSCALE_PASSES:-5}"  # grayscale 반복 → CPU+Block을 makespan 지배로
-ITERATIONS="${ITERATIONS:-10}"
-CPU_STRESS_WORKERS="${CPU_STRESS_WORKERS:-3}"
+# ── 기본값 = 검증된 interval-merge(C3) config (인자 없이 bash exp_mixed_noise.sh <out> 하면 fig7 재현) ──
+# SWEEP_CPU_STRESS=1(기본)에서 FRAMES_LEVELS 값 = CPU 경합 강도(stress-ng 워커 수). 1→4로 겹침 8→30%.
+FRAMES_LEVELS=(${FRAMES_LEVELS:-1 2 3 4})
+# STRESS = 동시에 켤 자원. interval-merge는 둘 이상 wait이 시간상 겹칠 때 의미. CPU+Net이 검증된 조합
+#   (둘 다 포착 98%/89%). Block은 issue→complete service-time이 범위 밖→under-removal로 스토리 역전이라 제외.
+STRESS="${STRESS:-cpu net}"
+GRAYSCALE_PASSES="${GRAYSCALE_PASSES:-3}"   # cpu_worker grayscale 반복(register/L1-bound)
+ITERATIONS="${ITERATIONS:-5}"
+CPU_STRESS_WORKERS="${CPU_STRESS_WORKERS:-3}"  # SWEEP_CPU_STRESS=1이면 루프가 강도로 덮어씀
 NET_STRESS_FLOWS="${NET_STRESS_FLOWS:-4}"
+# victim 워커 크기(검증값): cpu_worker 반복 N_CPU(강도별 ∝3/(k+1)로 balance), net_worker sustained
+#   업로드 N_NET개 × CHUNK_KB(1MB 객체 — 작은 put_object 다발은 qdisc 큐잉 안 잡힘), block 워커 off.
+N_CPU="${N_CPU:-4500}"; N_NET="${N_NET:-2}"; N_BLOCK="${N_BLOCK:-0}"
+CHUNK_KB="${CHUNK_KB:-1024}"; UPLOAD_VICTIM="${UPLOAD_VICTIM:-1}"
 BIO_STRESS_JOBS="${BIO_STRESS_JOBS:-4}"
 BLOCK_QUEUE_DEPTH="${BLOCK_QUEUE_DEPTH:-2}"
 CPU_PIN_CORE="${CPU_PIN_CORE:-2}"   # stress-ng + victim의 cpu_worker가 경합하는 코어(→CPU wait)
