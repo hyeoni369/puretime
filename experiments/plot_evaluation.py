@@ -137,16 +137,34 @@ def fig_accuracy_baseline(df_acc, output_dir, fmt="pdf"):
     stats = []
     for nt in noise_types:
         label = get_label(nt)
-        bl = df_baseline[df_baseline["resource_type"] == nt]["t_e2e_ms"]
-        if bl.empty:
-            bl = df_baseline["t_e2e_ms"]
-        noisy = df_noisy[df_noisy["resource_type"] == nt]["t_e2e_ms"]
-        pt = df_noisy[df_noisy["resource_type"] == nt]["t_puretime_ms"]
+        bl_df = df_baseline[df_baseline["resource_type"] == nt]
+        if bl_df.empty:
+            bl_df = df_baseline
+        noisy_df = df_noisy[df_noisy["resource_type"] == nt]
+        bl = bl_df["t_e2e_ms"]
+        noisy = noisy_df["t_e2e_ms"]
+        pt = noisy_df["t_puretime_ms"]
 
         bl_mean, noisy_mean, pt_mean = bl.mean(), noisy.mean(), pt.mean()
-        total_noise = noisy_mean - bl_mean
-        removed_noise = noisy_mean - pt_mean
-        efficiency = (removed_noise / total_noise * 100) if total_noise > 0 else 0
+
+        # Efficiency = PAIRWISE per-invocation: each noisy run vs the solo of the SAME iteration
+        # (= "각 호출의 solo를 G.T."). Robust to baseline drift (e.g. HDD wear over a block run
+        # makes the aggregate-mean baseline non-stationary → spurious ~100%); the per-pair median
+        # neutralizes it. For non-drifting resources (CPU/Net) pairwise ≈ aggregate.
+        solo_by_iter = bl_df.groupby("iteration")["t_e2e_ms"].median()
+        per_pair = []
+        for _, r in noisy_df.iterrows():
+            it = r["iteration"]
+            if it in solo_by_iter.index:
+                solo_i = solo_by_iter.loc[it]
+                e_i, pt_i = r["t_e2e_ms"], r["t_puretime_ms"]
+                if e_i > solo_i:
+                    per_pair.append((e_i - pt_i) / (e_i - solo_i) * 100)
+        if per_pair:
+            efficiency = float(np.median(per_pair))
+        else:
+            total_noise = noisy_mean - bl_mean
+            efficiency = (noisy_mean - pt_mean) / total_noise * 100 if total_noise > 0 else 0
 
         n_bl, n_noisy, n_pt = len(bl), len(noisy), len(pt)
         stats.append({

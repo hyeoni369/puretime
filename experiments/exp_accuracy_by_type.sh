@@ -513,8 +513,12 @@ main() {
     if [[ " $RESOURCES " == *" block "* ]]; then
     log_info ""
     log_info "=== Block I/O Contention Experiments ==="
-    for jobs in "${BIO_STRESS_JOBS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
+    # iter 바깥 / jobs 안쪽으로 interleave: solo(0)와 contended(4)를 iteration마다 번갈아 측정해
+    # 각 contended run이 동시대 solo와 짝지어지도록 한다. (block=disk라 solo baseline이 시간에
+    # 따라 drift(fragmentation/thermal)하므로, solo 전체→contended 전체 순서면 그 사이 누적된
+    # degrade가 가짜 과다제거를 만든다. interleave로 drift에 강건하게.)
+    for iter in $(seq 1 $ITERATIONS); do
+        for jobs in "${BIO_STRESS_JOBS[@]}"; do
             run_block_io_experiment "$jobs" "$iter"
             sleep 10
         done
