@@ -24,7 +24,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 |----|---------------------|-----------|-----------|------|------|-----------|
 | C1 | noise-free makespan이 solo 기준(GT) 대비 오차 E% 이내 | 1-1, 1-2, 1-4 | core | **P0** | **설계** | 그룹1 단일-노이즈 **한 세트**에서 1-1·1-2·1-4 동시 추출. victim 4종, K=50, solo 분포 GT, 분포+오차막대. **E2E K=30/50(06-16): CPU 98%@1.0→3.1×(강도 sweep)·Net 89%@4.8×·Block 92%@3.2×(queue_depth=2 전제 + store-모드 I/O-bound victim, 과다제거 꼬리 ~13% 명시 — "Block 결론 수정 2026-06-16" 노트 참조). 기본 depth=32에선 Block 39%(NCQ가 경합을 issue→complete에 숨김).** |
 | C2 | 네 자원 각각의 wait를 정확히 분류·귀속 (breakdown ↔ 주입 유형 일치) | 1-2 | — | P1 | **설계** | 그룹1 세트에서 추출. 자원 전용 victim이면 주입↔귀속 1:1로 깨끗. 1-3 스택바와 연계 |
-| C3 | 자원 간 wait가 겹쳐도 중복 없이 제거 — 단순 역산 대비 과다차감 회피 | 1-3, 2-1 | C4 | **P0** | **설계** | 1-3(victim=video_processing, 단일스레드)에서 쌍+셋 조합 → 2-1에서 merge vs 단순역산. 겹침 비율을 x축으로 과다차감 정량화. **novelty 핵심** |
+| C3 | 자원 간 wait가 겹쳐도 중복 없이 제거 — 단순 역산 대비 과다차감 회피 | 1-3, 2-1 | C4 | **P0** | **완료** | **E2E(06-16, fig7):** 동시 CPU+Net 경합 victim(2-스레드, 스레드별 CPU affinity로 cpu_worker=경합코어·net_worker=빈코어 → 한 cgroup의 CPU wait ∩ Net wait이 시간상 겹침). 겹침 8→30% sweep: **merge nf/solo 0.78–1.07(전 구간 valid)** vs **naive 0.79→−0.41(겹침↑→음수, 물리적 불가능, 고겹침 7/10 runs 음수)**. 단일스레드는 자원 직렬화로 겹침≈0, Block은 issue→complete service-time이 범위 밖→스토리 역전이라 **CPU+Net**(둘 다 포착 98%/89%)으로 실증. **novelty 핵심** |
 | C4 | self/neighbor 구분으로 정당한 self 대기는 보존, neighbor 노이즈만 제거 | 2-2 | — | P1 | 계획 | 분류 제거 시 결과 유의 변화 보여야 (미설계) |
 | C5 | input(작업량) 변동 하에서 intrinsic 변동은 보존, extrinsic 노이즈만 제거 (solo와 상관) | 3-1 | 3단계 논거 | **P0** | **설계** | victim 둘: float(입력 크기) + detect+sentiment(입력 내용·얼굴 수 0·1·5·10·15·30). 둘 다 CPU-only register/L1 가변 stressor(IPC dilation 누수 차단). K=50, solo 분포 GT. **최우선 신규** |
 | C6 | 단일 호출로 통계 표본 없이 신뢰성 있는 순수 시간 | 3-2 | C8 | **P0** | **설계** | 단일실행 vs 통계(median·P90·raw wall). 3-1 데이터 재사용(셔플해 시계열화), K=50=표본 N. **+ 결정 대조(5-1·5-2 흡수)**: CloudWatch 2σ 밴드·KPA 70 target counterfactual |
@@ -47,7 +47,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 ### audit 반영 구현 현황 (2026-06-09, `audit` 브랜치 커밋됨)
 점검 → 분류 → 수정 완료분. (figure/CSV는 이 수정 반영 후 재생성 필요 — 미반영.)
 - **Analyzer 정확성**: wait union을 cgroup span `[first_ts,last_ts]`과 교집합(softirq_other 범위 밖 → 음수 makespan 버그 수정); 런타임 invariant assert; `trace_summary` trailer의 `dropped_events>0`이면 exit 2로 거부; CPU wait에 선행 슬라이스 계상(CPU-3, 핑퐁엔 효과~0·I/O wakeup 로버스트성).
-- **interval-merge ablation(C3/2-1) 코드 경로**: 양 분석기가 merge(`noise_free_makespan`) vs naive(union 없는 자원별 합, `noise_free_naive`, 음수 가능) 동시 출력 → 겹침비율 vs 오차 figure 데이터 준비됨. (실험 run·figure는 미실행.)
+- **interval-merge ablation(C3/2-1) 코드 경로**: 양 분석기가 merge(`noise_free_makespan`) vs naive(union 없는 자원별 합, `noise_free_naive`, 음수 가능) 동시 출력 → 겹침비율 vs 오차 figure. **실행 완료(2026-06-16): `experiments/data/mixed_noise/` + fig7** (merge 0.78–1.07 vs naive 0.79→−0.41, 겹침 8→30%).
 - **Tracer/Loader**: block I/O를 bio→bi_blkg→blkcg로 귀속(writeback kworker도 컨테이너 귀속; io 위임 전제); `dropped_events` per-CPU 카운터 + loader trailer + drop 시 조기 중단; `net_dev_xmit`·`block_rq_complete` 비활성(#if 0, 미사용); `sched_event`에서 미사용 `comm`/`prev_comm` 제거(레코드 88→56B); enqueue cgroup walk 중복 제거.
 - **버퍼**: ring buffer 512MB(고부하 기본; 오버헤드 측정만 32MB), json_writer 4MB.
 - **분석기 단일화**: `tests/`·`experiments/` 두 사본을 동일 로직으로 동기화(출력 형식만 다름: human/-j vs jq 배열). 변경 시 양쪽 동시.
@@ -75,20 +75,19 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 - **그림**: 함수별 wall/순수 시간/solo + 오차막대(C1); breakdown 스택바, 주입=자원 1:1(C2); 강도 vs 오차(1-4 robustness).
 - **prune**: 다 돌리고 잘 나온 것만 본문에. 단 C1 정확도 자체가 전 victim 전멸이면 prune 아닌 설계 재검토.
 
-### 1-3 — Mixed noise (C3 / 리뷰 C4, P0)
-- **증명**: 다자원 동시 경합에서 대기가 겹쳐도 정확히 제거 → merge 필요성의 무대.
-- **victim**: FunctionBench video_processing (OpenCV 흑백 변환), **cgroup v2 컨테이너 + MinIO**. **단일 스레드 고정**(`cv2.setNumThreads(1)` + `OMP_NUM_THREADS=1` 등 BLAS 포함). 다운로드·업로드 **동기(blocking)**. 입력 영상 크게 → 읽기 디스크(decode) + CPU(변환) + 업로드 TX 셋 다.
-- **noise 조합**: 단일 3개(CPU/net/bio)는 **1-2 데이터 재사용**(중복 측정 X). 본 실험 = 쌍 3(CPU+net, CPU+bio, net+bio) + 셋(CPU+net+bio). 다 돌리고 겹침 없거나 이상한 조합 사후 제거.
-- **stressor 셋**(각 다른 cgroup): CPU(register/L1) · net(같은 TX qdisc에 패킷) · bio(같은 디바이스/스케줄러 큐, **BFQ**).
-- **반복·G.T.**: K=50. solo는 victim당 50회 1회 → 50 solo + 4조합×50 = **250 호출**. G.T.=solo 분포.
-- **그림**: 조합별 wall/순수 시간/solo; breakdown 스택바(C2 연계); 결정적 그림은 2-1과 공유.
-- **선결 체크포인트**: 실제 겹침 비율 측정. 너무 작으면 victim의 I/O·CPU 인터리빙 패턴 조정(2-1 공통 과제).
+### 1-3 — Mixed noise (C3 / 리뷰 C4, P0) — **구현됨 2026-06-16, 설계 수정**
+- **증명**: 다자원 *동시* 경합에서 대기가 겹쳐도 정확히 제거 → merge 필요성의 무대.
+- **⚠️ 설계 수정(실측으로 확정)**: 원안의 *단일 스레드 + blocking I/O*는 자원을 **직렬화**해(선점 중이면 I/O 대기가 아니고, throttle된 write에 막혀 있으면 runnable이 아님) CPU wait ∩ I/O wait이 **거의 분리** → 겹침≈0 → merge가 보일 게 없음. 겹침엔 **진짜 동시성**이 필요(파이프라인 서버리스 ExCamera/Sprocket이 실제로 그러함). 또 **Block은 제외**: queue_depth=2여도 무거운 경합에선 슬로다운이 `issue→complete` device service time(범위 밖, 미포착)에 지배돼 merge가 solo 위로(under-removal) → naive가 오히려 solo에 가까워 스토리가 역전. **CPU(98%)+Net(89%)** 둘 다 잘 포착되는 자원으로 실증.
+- **victim**(`funcs/video-processing`, numpy+boto3, `--network=host`): **동시 2-스레드** + **스레드별 CPU affinity**(`os.sched_setaffinity`). `cpu_worker`(grayscale, register/L1-bound) → stressor가 포화시키는 코어(CPU wait). `net_worker`(MinIO에 **sustained 대용량 업로드**, 1MB 객체 — 작은 put_object 다발은 request-response 바운드라 qdisc 큐잉이 안 잡힘) → **별도 빈 IO_CORE**(CPU 안 굶주려 TX 계속 발행 → HTB qdisc shaping 큐잉이 net wait으로 포착). 두 워커가 다른 코어 → 한 cgroup에서 CPU wait ∩ Net wait이 **시간상 겹침**(unit-test 시나리오를 실제 victim에 구현). `N_CPU`로 두 워커를 **동시 종료**하도록 balance(off-critical-path 과다제거 방지).
+- **stressor**(각 다른 cgroup): CPU=`stress-ng --cpu-method float`(register/L1, `--taskset` 경합 코어) · net=`iperf3 -P 4` + iface HTB 10mbit(victim TX가 같은 throttle qdisc에 큐잉).
+- **sweep·반복**: CPU 경합 강도(stress-ng 워커 수) 1–4를 sweep해 겹침 8→30%를 만든다. 강도별 `N_CPU∝3/(강도+1)`로 balance 유지. 조건당 K=5(solo+stress 교차). G.T.=solo 분포.
+- **데이터·그림**: `experiments/data/mixed_noise/results.csv`, `plot_exp2_interval_merge.py` → **fig7**.
 
-### 2-1 — Interval-merge ablation (C3, P0)
+### 2-1 — Interval-merge ablation (C3, P0) — **구현됨 2026-06-16**
 - **증명**: merge가 단순 역산(`wall − Σwait`)보다 정확 — 단순 역산은 겹친 구간 이중 차감으로 noise-free 과소(음수 가능), merge는 합집합으로 한 번만.
-- **데이터**: 1-3 재사용, **새 캡처 없음**. 같은 JSONL을 분석 두 경로로(merge on / 단순 역산).
-- **반복·G.T.**: 1-3 그대로. G.T.=solo 분포. merge는 안에, 단순 역산은 아래(과소).
-- **그림**: 헤드라인 x=겹침 비율(merge−단순역산 차이를 wall 대비 %), y=G.T. 대비 오차 — 단순 역산 우상향, merge 평탄·0 근처, 음수 makespan은 빨간 점. 요약 "단순 역산 최대 N% 과다차감 / merge 오차 E% 이내". 단일 자원 조합=merge≈단순역산 → "겹침 없을 땐 무해" sanity check.
+- **데이터**: 1-3와 **동일 run**. 분석기가 `noise_free_makespan`(merge ∪) 와 `noise_free_naive`(자원별 Σ, 음수 가능)를 **동시 출력** → 같은 JSONL 두 경로.
+- **결과(fig7)**: 겹침 8→30% sweep에서 **merge nf/solo 0.78–1.07(전 구간 valid, ≈solo)** vs **naive 0.79→−0.41**. 겹침↑면 naive는 발산해 **음수**(고겹침 7/10 runs) — 물리적으로 불가능(혼자보다 빠를 수 없음). 겹침≈0(강도 낮음)에선 merge≈naive → "겹침 없을 땐 무해" sanity check 자동 충족.
+- **그림**: Panel A x=측정 겹침비율, y=nf/solo — merge는 solo=1 선에 평탄, naive는 우하향해 빨간 "impossible(nf<0)" 영역으로. Panel B 겹침 수준별 solo/merge/naive 막대.
 
 ### 3-1 — Input-invariance (C5, P0)
 - **증명**: 자원 커버리지가 아니라 *속성* — intrinsic(input) 작업량 차이는 보존, extrinsic 경합만 제거. CPU 단일 자원으로 충분(속성은 자원 무관). 자원 다양성은 1-3 담당.

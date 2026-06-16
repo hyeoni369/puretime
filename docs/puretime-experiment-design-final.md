@@ -1,7 +1,7 @@
 # PureTime 실험 설계 (최종 확정)
 
 > SoCC 2026 2라운드 제출용. 5개 실험으로 P0 claim(C1·C3·C5·C6·C7) 전부 검증.
-> 공통 testbed: **cgroup v2 격리 컨테이너로 서버리스 함수 실행 환경 재현**(Knative 미배포 — 측정에 필요한 건 cgroup 격리이며 모든 컨테이너 기반 서버리스의 공통 기반). core 0 제외 + victim/stressor 코어 핀 고정. victim 단일 스레드. NIC offload off.
+> 공통 testbed: **cgroup v2 격리 컨테이너로 서버리스 함수 실행 환경 재현**(Knative 미배포 — 측정에 필요한 건 cgroup 격리이며 모든 컨테이너 기반 서버리스의 공통 기반). core 0 제외 + victim/stressor 코어 핀 고정. victim 단일 스레드(**예외: 실험 2 interval-merge만 동시 2-스레드 + 스레드별 코어 핀** — 겹치는 wait을 만들려면 진짜 동시성 필요; CPU-경합 스레드는 그래도 단일 코어 핀이라 모델 가정 유지. 실험 2 "설계 변경" 참조). NIC offload off.
 > 모든 노이즈 환경의 G.T. = *조용한 노드의 solo run 분포*(점이 아니라 분포; 판정은 분포 겹침/2-표본 검정).
 > 용어: PureTime이 산출하는 값은 **순수 실행 시간(noise-free makespan)**.
 
@@ -30,23 +30,30 @@
 
 ## 실험 2. Mixed-noise 환경에서 PureTime의 성능 분석 with interval-merge
 
-### 실험 방법
+### 실험 방법 (★ 2026-06-16 실측으로 원안에서 변경 — 아래 "설계 변경" 참조)
 
-- 여러 리소스를 동시에 사용하는 FunctionBench의 video_processing(영상 download → OpenCV 흑백 변환 → 영상 upload) 함수 사용
-  - 단일 스레드 고정, 다운로드·업로드 동기(blocking)
-- Stress 도구를 이용하여 부하를 주면서 순수 실행 시간의 정확성 분석
-  - Stress 도구들의 조합(CPU, Net, Block, CPU+Net, Net+Block, CPU+Block, CPU+Net+Block) 중 가장 순수 실행 시간의 정확성이 높게 나오는 상황 선택
-  - 영상 크기 조절해가면서 리소스들의 interval 간에 겹치는 비율 조정하면서 다양하게 test
+- victim = `funcs/video-processing`(numpy 흑백 변환 + boto3 MinIO 업로드), `--network=host`, cgroup v2 컨테이너.
+  - **동시 2-스레드 + 스레드별 CPU affinity**(`os.sched_setaffinity`): `cpu_worker`(grayscale, register/L1-bound) → stressor가 포화시키는 경합 코어(CPU wait), `net_worker`(MinIO **sustained 대용량 업로드**, 1MB 객체) → **별도 빈 `IO_CORE`**(CPU 안 굶주려 TX 계속 발행 → throttle qdisc 큐잉이 net wait으로 포착). 두 워커가 다른 코어 → 한 cgroup에서 **CPU wait ∩ Net wait이 시간상 겹친다**.
+  - `N_CPU`로 두 워커를 **동시 종료**하도록 balance(불균형이면 짧은 워커의 wait이 critical-path 밖 → 과다제거).
+- stressor: CPU=`stress-ng --cpu-method float`(register/L1, 경합 코어 `--taskset`) · net=`iperf3 -P 4` + iface HTB 10mbit(victim TX가 같은 throttle qdisc에 큐잉, 실험 1의 89%-포착 regime 그대로).
+- **CPU 경합 강도(stress-ng 워커 수) 1–4 sweep**으로 겹침 비율 8→30%를 만든다. 강도별 `N_CPU∝3/(강도+1)`로 balance 유지.
 
-### Figure
+### ⚠️ 설계 변경: 원안 → 실측본 (이유)
 
-- 리소스 간에 서로 얼마나 겹치는지에 따른 순수 실행 시간 성능을 with / without interval-merge 관점에서 분석
-  - mixed noise에서 순수 실행 시간이 solo와 맞는 것 = 정확성 + merge 기여를 동시에 보임
+원안(잠금 설계)은 **단일 스레드 + 동기 I/O victim**으로 **CPU·Net·Block 쌍/삼중 조합** 중 정확도 높은 걸 고르는 것이었으나, 실측에서 **그대로는 interval-merge가 보일 게 없음**이 드러나 다음 두 가지를 바꿨다(논문에 반영 필요):
 
-### ★ 실측 발견 (2026-06-16, WIP — `exp_mixed_noise.sh` + 재작성 video victim)
+1. **단일 스레드 → 동시 2-스레드(+스레드별 코어 핀).** 단일 스레드는 자원을 **직렬화**한다 — 선점 중(CPU wait)이면 I/O를 기다리는 게 아니고, throttle된 write에 막혀 있으면(D-state) runnable이 아니다 → CPU wait과 I/O wait이 **시간상 거의 분리** → 겹침≈0 → merge가 고칠 게 없다(실측: 단일스레드 겹침 ~9%, merged가 solo 위로). 겹침엔 **진짜 동시성**이 필요하며 이는 실제 파이프라인 서버리스(ExCamera NSDI'17, Sprocket SoCC'18: decode→process→encode→upload 동시)와 일치한다. 코어를 2개 쓰지만 **CPU-경합을 받는 `cpu_worker`는 여전히 단일 코어 핀**이라 PureTime의 single-core CPU-wait 모델 가정은 유지된다(`net_worker`는 CPU 경합을 안 만드는 자리일 뿐).
+2. **조합에서 Block 제외 → CPU+Net.** Block은 `queue_depth=2`여도 무거운 경합에서 슬로다운이 `issue→complete` **device service time(PureTime 범위 밖, 미포착)**에 지배돼 merged가 solo **위로(under-removal)** 가고 naive가 오히려 solo에 가까워져 **스토리가 역전**된다(실측 확인). CPU(98%)·Net(89%)은 둘 다 잘 포착되는 자원이라 merged≈solo + naive≪solo의 정방향 스토리가 나온다. (Net이 잘 잡힌다는 건 별도 확인 — 초기 "net 범위 밖"은 bridge/NAT networking + CPU-stress 코어 핀으로 인한 오진이었고 `--network=host` + 코어 분리로 해결. TCP 백오프는 실험 1에서도 있던 ~11% 잔차일 뿐.)
 
-- **(정정) net은 잘 잡힌다 — 이전 "net 범위 밖" 진단은 오진(하니스 버그)이었다:** video victim을 `--network=host`로 실행하면 TX가 throttle 걸린 물리 iface qdisc에 직접 올라가 **wait_net이 포착된다 (net-only stress 실측: wait_net 35s, removal ~90% — 실험 1의 89%와 일치)**. 처음 파일럿에서 `wait_net≈0`이었던 건 (1) victim이 **bridge/NAT networking**이라 net_dev↔socket cgroup 연결이 깨졌고, (2) victim을 **CPU-stress 코어에 핀**해 업로드가 CPU 굶주림이었기 때문. 둘 다 수정(`start_victim`: `--network=host` + cpu가 stress일 때만 핀). TCP 백오프는 실험 1에서도 있던 ~11% 잔차(nf/solo 1.44)일 뿐 주원인 아님.
-- **남은 진짜 과제(미완):** interval-merge는 **둘 이상 자원의 wait이 시간상 겹칠 때** 의미가 있다 → `merged < naive`(겹침 이중차감)가 유의하게 나오는 **조합·victim 설정을 실측으로 찾기**. 긴장점: CPU 경합엔 victim을 포화 코어에 핀해야 하는데 그러면 net/block이 굶으니, gentle CPU 경합 또는 Net+Block 조합 등으로 겹침을 만들어야 한다. 그 뒤 풀런 + plotter(겹침비율 x축, merge vs naive vs solo). 나머지 실험(1·3·4·5)은 완료.
+### Figure (`fig7_interval_merge.pdf`, `plot_exp2_interval_merge.py`)
+
+- 리소스 wait이 겹치는 비율에 따른 순수 실행 시간을 with / without interval-merge로 비교.
+  - **Panel A**: x=측정 겹침비율(% of makespan), y=nf/solo. interval-merge는 solo=1 선에 평탄, naive는 우하향해 "impossible(nf<0)" 영역으로.
+  - **Panel B**: 겹침 수준별 solo / merge / naive 막대.
+
+### ★ 실측 결과 (2026-06-16, 완료 — `experiments/data/mixed_noise/`)
+
+- 겹침 8→30% sweep: **interval-merge nf/solo 0.78–1.07(전 구간 valid, ≈solo)** vs **naive 0.79→−0.41**. 겹침↑면 naive는 발산해 **음수**(고겹침 강도3에서 7/10 runs 음수) — 혼자보다 빠를 수 없으니 물리적으로 불가능. = **mixed noise에서 merge는 solo를 복원(정확성), naive는 겹침을 이중차감(merge 기여)** 을 한 그림에 보인다. 겹침≈0(저강도)에선 merge≈naive → "겹침 없을 땐 무해" sanity check 자동 충족. 나머지 실험(1·3·4·5)도 완료.
 
 ---
 
@@ -107,5 +114,5 @@
 ## 해석 원칙 (각주)
 
 - **prune 자유, 전멸은 경고**: 결과가 잘 나온 victim·강도·조합만 본문에 쓰는 것은 자유. 단 C1(정확도)은 P0이므로, 어떤 victim·강도에서도 정확도가 안 나오면 "안 쓰면 그만"이 아니라 **설계 재검토 신호**다.
-- **실험 2 문구**: "가장 정확성 높은 상황 선택"은 설계 노트 표현. 논문 본문 옮길 때는 cherry-pick 의심을 피하려 "겹침이 발생하는 조합에서 merge 유무 비교"로 표현.
-- **데이터 재사용 관계**: 실험 2 ⊃ 실험 1(단일 노이즈) · 실험 4 = 실험 3 데이터 셔플 · (merge ablation) = 실험 2 데이터.
+- **실험 2 문구**: 원안의 "조합 중 가장 정확한 상황 선택"은 cherry-pick 의심을 받으므로 **폐기**. 실측본은 **겹침 비율을 8→30%로 sweep**해 merge vs naive를 *연속 추세*로 보인다(cherry-pick 아님 — 모든 겹침 수준에서 merge가 valid, naive가 발산). 논문 표현도 "겹침 비율에 따른 merge 유무 비교"로.
+- **데이터 재사용 관계**: 실험 4 = 실험 3 데이터 셔플 · (merge ablation 2-1) = 실험 2(1-3) 데이터. (원안의 "실험 2 ⊃ 실험 1 단일 노이즈 재사용"은 실측본에서 폐기 — 실험 2는 CPU+Net 동시 경합 전용 victim/sweep이라 단일-노이즈 데이터를 재사용하지 않는다.)
