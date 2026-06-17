@@ -65,7 +65,7 @@ def main():
     args = ap.parse_args()
 
     cpu = pairwise(args.acc, "cpu", ["1", "3", "7"])
-    net = pairwise(args.net, "network", ["2", "4", "8"])
+    net = pairwise(args.net, "network", ["4", "6", "8"])   # 강도2(2.85×) 제외: 약한 경합이라 net wait이 작아 TCP backoff 잔차 비율↑로 removal 낮음 (§7)
     blk = pairwise(args.acc, "block_io", ["4"])   # single representative point
 
     fig, ax = plt.subplots(figsize=(4.2, 3.0))

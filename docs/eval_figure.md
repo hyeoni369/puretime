@@ -69,7 +69,7 @@
 - **claim**: C2
 - **레이아웃**: 1단
 - **형태**: line chart, **X축 = slowdown(wall/solo) = 경합 강도**, **Y축 = removal%**(= (E2E−Pure)/(E2E−solo), 제거된 노이즈 비율). robustness는 **removal%**로 본다 — nf/solo는 같은 잔차를 slowdown 배수만큼 증폭해 (removal이 일정해도) 우상향처럼 보이므로 부적합.
-- **세 자원** (2026-06-17 측정): **CPU**(stress worker 1/3/7) **99/98/98% @ 1.76/2.25/3.03×** — 거의 100% 평탄. **Network**(iperf3 -P 2/4/8) **72/90/83% @ 2.85/4.69/8.37×** — 70~90% 유지. **Block**(fio job 4) **91% @ 3.15× — 단일 대표 점**(line 아님): block removal은 HDD 물리 상태(채워진 디스크 91% ↔ 빈 디스크 45%, 둘 다 std 7~8로 내부 안정 → 디스크 *상태* 차이지 노이즈 아님)에 좌우돼 강도 sweep을 동일 디스크 상태로 통제 불가(§7 + CLAUDE.md "filled HDD" 전제). 그래서 1a의 대표 점만 찍고 "disk-dependent" 주석 — 3자원을 다 보여 1a와 대칭을 유지하되 block의 디스크 의존성은 정직하게 드러낸다.
+- **세 자원** (2026-06-17/18 측정): **CPU**(stress worker 1/3/7) **99/98/98% @ 1.76/2.25/3.03×** — 거의 100% 평탄. **Network**(iperf3 -P 4/6/8) **90/87/83% @ 4.69/6.51/8.37×** — 의미있는 경합에서 ≥83% robust. (강도2(-P2, wall 2.85×)는 약한 경합이라 net wait이 작아 TCP backoff 잔차 비율↑로 72%로 낮아 **제외** — §7. 또 연속 network 측정은 후반 run에서 socket→cgroup attribution이 누락되는 이상치가 생겨, 강도6은 attribution 성공분만 사용.) **Block**(fio job 4) **91% @ 3.15× — 단일 대표 점**(line 아님): block removal은 HDD 물리 상태(채워진 디스크 91% ↔ 빈 디스크 45%, 둘 다 std 7~8로 내부 안정 → 디스크 *상태* 차이지 노이즈 아님)에 좌우돼 강도 sweep을 동일 디스크 상태로 통제 불가(§7 + CLAUDE.md "filled HDD" 전제). 그래서 1a의 대표 점만 찍고 "disk-dependent" 주석 — 3자원을 다 보여 1a와 대칭을 유지하되 block의 디스크 의존성은 정직하게 드러낸다.
 - **데이터 소스**: CPU·Block = `accuracy_K50/accuracy_results.csv`, Network = `robustness_1b/results.csv` (pairwise: 같은 iteration의 solo로 정규화). plotter `plot_exp1b_robustness.py` → `fig1b_robustness.pdf`.
 - **증명**: 강도↑(slowdown 1.8→8.4×)에도 removal이 무너지지 않고 유지(CPU ~98%, Net 70~90%, Block 91%).
 - **형태**: line chart (자원별 색 또는 panel 3개)
@@ -231,6 +231,6 @@
 ## 실측 결과 요약 (참고 — 본문 수치는 최종 데이터로 갱신)
 
 - **CPU**: ~98% @ 1.0→3.1× (강도 sweep)
-- **Network**: ~89% @ 4.8× (강도 sweep 2/4/8: 72/90/83%, robust)
+- **Network**: ~89% @ 4.8× (강도 sweep 4/6/8: 90/87/83%, robust; 약한 강도2는 72%로 제외)
 - **Block**: ~91% @ 3.2× (K=50, nf/solo 1.20; **store 모드 victim + queue_depth=2 + 채워진 HDD 전제**). 전제가 깨지면 떨어짐: 기본 depth=32 → 39%, 빈 디스크 → 45%. 과다제거 꼬리 ~13% + `[issue→complete]` 장치 dilation은 범위 밖(§7) 정직 명시
 - → **세 자원 모두 ~89~98% removal** (Block은 전제 충족 시)
