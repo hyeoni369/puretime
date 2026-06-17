@@ -28,7 +28,7 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 | C4 | self/neighbor 구분으로 정당한 self 대기는 보존, neighbor 노이즈만 제거 | 2-2 | — | P1 | 계획 | 분류 제거 시 결과 유의 변화 보여야 (미설계) |
 | C5 | input(작업량) 변동 하에서 intrinsic 변동은 보존, extrinsic 노이즈만 제거 (solo와 상관) | 3-1 | 3단계 논거 | **P0** | **설계** | victim 둘: float(입력 크기) + detect+sentiment(입력 내용·얼굴 수 0·1·5·10·15·30). 둘 다 CPU-only register/L1 가변 stressor(IPC dilation 누수 차단). K=50, solo 분포 GT. **최우선 신규** |
 | C6 | 단일 호출로 통계 표본 없이 신뢰성 있는 순수 시간 | 3-2 | C8 | **P0** | **설계** | 단일실행 vs 통계(median·P90·raw wall). 3-1 데이터 재사용(셔플해 시계열화), K=50=표본 N. **+ 결정 대조(5-1·5-2 흡수)**: CloudWatch 2σ 밴드·KPA 70 target counterfactual |
-| C7 | 트레이싱 추가 지연·자원 비용이 낮음 | 4-1 | C6 | **P0** | **설계** | **재설계**: (A)지연 w/vs w/o 조용한 환경 분포+검정+CI, (B)자원 CPU·RSS·256MB·JSONL. online만(Analyzer offline=critical path 밖, 제외). HPDC "더 빠름" 음수 논란 해소 |
+| C7 | 트레이싱 추가 지연·자원 비용이 낮음 | 4-1 | C6 | **P0** | **완료** | **(A)지연 fig3(06-17):** 오버헤드를 victim 절대시간이 아니라 **이벤트율의 함수**로 측정(victim=`ctxsw-bench` 핑퐁, 경쟁 노이즈 없이 sched_switch 결정적 생성, 이벤트율 sweep). 28K→717K switch/s에서 **+2.2%→+44.4% 단조-선형, 전 구간 양수(음수≈0)** → HPDC "더 빠름" 음수 논란 근본 해소. **(B)자원 fig4:** CPU~1%/RSS 71MB(events 맵 32MB). online만(Analyzer offline 제외) |
 | C8 | 출력이 코드 회귀 vs 환경 노이즈를 구분 (false alarm 없음, 분산↓로 카나리 가속) | 3-2 (흡수) | C9 | P1 | **설계** | 3-2 결정 대조에 흡수. CloudWatch mean±2σ → 노이즈 낀 wall은 false alarm, 순수 시간은 정상. 별도 실험 삭제 |
 | C9 | 노이즈로 인한 가짜 concurrency 증가를 걸러 over-provisioning 회피 신호 | 3-2 (흡수) | C9 | P1 | **설계** | 3-2 결정 대조에 흡수. KPA target 70/pod → wall은 over-provision, 순수 시간은 scale 안 함. counterfactual, 온라인은 future work |
 | C10 | 실제 워크로드(FunctionBench 등)·명시된 하드웨어에서 성립 | 6-1, 6-2 | C3 | P1/P2 | 계획 | 1-3·그룹1에서 이미 FunctionBench/SeBS victim + cgroup v2 container 명세 사용 → 6-1 일부 자동 충족. 6-2(실제 co-tenant) P2 |
@@ -112,11 +112,11 @@ PureTime은 short-lived·input-dependent 서버리스 함수에 대해, CPU·net
 ### 4-1 — 오버헤드 (C7 / 리뷰 C6, P0 · 재설계)
 - **증명**: PureTime online 비용이 (A)지연·(B)자원 둘 다에서 현실적 워크로드에 acceptable.
 - **victim**: 그룹1·1-3 재사용. 이벤트 적음(float)~많음(video/net) 다 포함 — (A) 측정 신뢰성(신호 큰 함수일수록 오버헤드 측정 쉬움)·(B) 자원 스펙트럼.
-- **(A) 지연**: w/ vs w/o PureTime, 같은 함수·입력, **조용한 환경**, K=50+ 반복해 분포 비교 + 2-표본 검정 + 차이 신뢰구간. (조용한 환경+반복으로 신호를 노이즈 위로 — HPDC 음수 원인 직접 교정.)
+- **(A) 지연 — 구현됨 2026-06-17 (fig3, `exp_overhead_ctxsw.sh` + `plot_overhead_ctxsw.py`):** PureTime 지연 오버헤드는 추적하는 **커널 이벤트 수에 비례**하므로, victim 시간을 절대 비교하는 대신 **이벤트율을 x축으로 sweep**한다. victim = **`ctxsw-bench`**(부모-자식 pipe 핑퐁: sched_switch를 결정적으로 생성, 같은 코어에서 *협력적으로* 번갈아 실행 → CPU 쟁탈=경쟁 노이즈 없이 이벤트율만 제어; `COMPUTE_PER_ROUND` 손잡이). 같은 워크로드를 PureTime ON/OFF로 K=15 측정(순서 counterbalance + boost off + self-reported `elapsed_ms`). **결과: 이벤트율 28K→717K switch/s에서 오버헤드 +2.2%→+44.4%로 단조-선형 증가, 전 구간 양수(95% CI가 0 미포함, 음수≈0)** — "오버헤드는 이벤트율에 선형 비례, 현실적 함수율에서 낮음". **왜 이 방식인가:** 단순 w/vs w/o(조용한 환경)는 PureTime 오버헤드(<1%)가 측정 노이즈보다 작아 절반이 음수로 나온다(HPDC "더 빠름" 논란). 부하를 같은 코어에서 경쟁시키면 victim CPU 몫 변동(±15~33%)이 신호를 묻고, 경쟁을 없애면 이벤트가 사라져 0이 된다. ctxsw-bench가 이 둘을 분리(경쟁 없는 결정적 이벤트 생성)해 음수를 근본 제거.
 - **(B) 자원**: Tracer+Loader **CPU%·RSS·ring buffer·JSONL I/O** 절대 프로파일링(빼기 아님). RSS는 ring buffer가 지배적(libbpf 이중 매핑). 기본값 **512MB**(고부하 실험 안전)는 RSS ~1GB → **오버헤드 측정 시 `events` 맵 max_entries를 32MB로 내려 빌드**(RSS ~70MB). 보고에 사용 크기 명시.
 - **online만**: eBPF hook + Loader 캡처만. **Analyzer는 offline task로 critical path에 없으므로 리소스 사용량/지연에서 제외(본문 명시).** softirq 필터링 이미 적용.
 - **운영점 주장**: 본문 수치는 현실적 워크로드 = **표준 벤치마크(FunctionBench/SeBS) 기본 입력**(별도 trace 인용 대신 표준 기본값이 곧 현실 운영점).
-- **그림**: 함수별 w/ vs w/o 실행시간 box plot + 차이%·CI; 자원 사용량은 본문/Table(online/offline 분리). 곡선 없음.
+- **그림**: (A) **fig3 = 이벤트율 vs 오버헤드 곡선**(이벤트율 x축, 오버헤드% y축, 95% CI 에러바, 선형 fit — 단조-양수). (B) fig4 = 자원 사용량(CPU%·RSS, online/offline 분리).
 - **rebuttal 카드(본문 외)**: 네트워크 worst-case 점 하나는 리뷰 오면 반영.
 
 ## Scope & Limitations (claim을 과장하지 않기 위해 박아둠)

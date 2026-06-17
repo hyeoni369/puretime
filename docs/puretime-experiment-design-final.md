@@ -97,17 +97,23 @@
 
 ### 실험 방법
 
-- 실험 1에서 사용한 함수들을 그대로 이용
-- stress 부하 없는 환경에서 함수 solo run 실행 시간을 측정(여러 번 반복해 분포로 비교)
-  - with and without PureTime
-- PureTime 프로세스가 사용하는 CPU%, Memory 사용량 체크
+- **(A) 지연 오버헤드 — ★ 2026-06-17 재설계 (아래 "설계 변경" 참조):** PureTime 지연 오버헤드는 추적하는 **커널 이벤트 수에 비례**한다. 따라서 victim 절대 실행시간을 비교하는 대신, **이벤트율(context-switch/s)을 x축으로 sweep**해 "이벤트율 vs 오버헤드" 곡선을 그린다. victim = `ctxsw-bench`(부모-자식 pipe 핑퐁: sched_switch를 결정적으로 생성, 같은 코어 협력 실행이라 CPU 경쟁 노이즈 없음; `COMPUTE_PER_ROUND`로 이벤트율 제어). 같은 워크로드를 with/without PureTime으로 K=15 측정(순서 counterbalance + CPU 터보 off + self-reported elapsed_ms).
+- **(B) 자원 오버헤드:** PureTime 프로세스가 쓰는 CPU%·RSS 측정(절대 프로파일링).
 - 오버헤드는 **online(eBPF hook + Loader 캡처)만** 고려. Analyzer는 offline에 수행되는 task로 critical path에 존재하지 않으므로 리소스 사용량/지연에서 제외(본문 명시)
 - **Ring buffer 크기 주의**: 기본값은 고부하/경합 실험에서 드롭을 막으려고 **512MB**로 둔다(RSS ~1GB). 하지만 **이 오버헤드 측정에서는 RSS가 곧 측정 대상**이므로, `src/puretime.bpf.c`의 `events` 맵 `max_entries`를 **32MB로 내려서 빌드**한 뒤 측정한다(RSS ~70MB). 본문에는 측정에 쓴 크기를 명시. (드롭 발생 시 trailer의 `dropped_events>0` → 해당 run 무효, 크기 상향 후 재실행.)
 
-### Figure
+### ⚠️ 설계 변경: w/vs w/o box plot → 이벤트율 vs 오버헤드 곡선 (이유)
 
-- 함수별 실행시간이 PureTime을 켜고 끄는 것에 따라 어떻게 변하는지 box plot
-- 리소스 사용량은 본문에만 넣거나, Table으로 넣기
+원안은 "실험 1 함수들을 조용한 환경에서 with/without PureTime 실행시간 분포 비교(box plot)"였으나, 실측에서 **음수 오버헤드 문제**가 드러나 (A)지연 방식을 바꿨다(HPDC "PureTime 켜면 더 빠름" 논란과 동일):
+
+- PureTime 지연 오버헤드는 **<1%로 측정 노이즈보다 작다**(트레이서가 별도 프로세스로 ring buffer를 drain, 커널 훅은 가벼움 → victim CPU를 거의 안 뺏음). 조용한 환경 w/vs w/o로는 절반이 음수(우연히 with가 빠름)로 나와 리뷰어가 의심한다.
+- 부하를 줘 이벤트를 만들면 PureTime이 일하지만(측정 가능), victim을 부하와 **같은 코어에서 경쟁**시키면 CPU 몫 변동(±15~33%)이 ~1% 신호를 다시 묻는다(별도 코어=이벤트 없음=0).
+- 해결: `ctxsw-bench`가 부모-자식 핑퐁으로 sched_switch를 **결정적·협력적으로** 생성 → CPU 쟁탈 없이 이벤트율만 제어. 이벤트율을 sweep하면 노이즈 없는 단조-양수 곡선.
+
+### Figure (`fig3_overhead_time.pdf`, `plot_overhead_ctxsw.py`)
+
+- **(A) fig3**: x=커널 이벤트율(×1000 context-switch/s), y=지연 오버헤드(%), 95% CI 에러바 + 선형 fit. **실측: 28K→717K switch/s에서 +2.2%→+44.4% 단조-선형, 전 구간 양수**(음수≈0) — "오버헤드는 이벤트율에 선형 비례, 현실적 함수율에서 낮음".
+- **(B)**: PureTime 자체 자원(CPU~1%/RSS 71MB, events 맵 32MB) — 본문/Table 또는 fig4.
 
 ---
 

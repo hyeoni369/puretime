@@ -23,6 +23,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -590,7 +591,11 @@ def main():
         f2 = fig_noise_source_identification(df_acc, output_dir, fmt)
         generated.extend([f for f in [f1, f2] if f])
 
-    if df_time is not None:
+    # fig3 (time overhead) is DEPRECATED here: the graph-bfs w/vs w/o box-plot produced
+    # negative overhead (signal < measurement noise). fig3 is now the event-rate vs overhead
+    # curve from plot_overhead_ctxsw.py (exp_overhead_ctxsw.sh data). Keep fig_overhead_time()
+    # for reference but do not regenerate fig3 here (would clobber the curve). See contract C7.
+    if df_time is not None and os.environ.get("PLOT_LEGACY_FIG3"):
         f3 = fig_overhead_time(df_time, output_dir, fmt)
         if f3:
             generated.append(f3)
