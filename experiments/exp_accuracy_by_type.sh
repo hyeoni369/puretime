@@ -22,15 +22,16 @@ set -e
 
 # CPU noise = stress-ng CPU worker 수(register/L1 --cpu-method float, victim과 같은 코어). 0=solo(GT 기준).
 # (이전엔 graph-bfs 컨테이너 N개 상호경합 = 약함+메모리 dilation. victim은 항상 float 1개; stressor만 stress-ng.)
-CPU_STRESS_WORKERS=(0 1 3 7)
+# 강도 배열은 env로 override 가능(fig 1b 강도 sweep용). 예: NET_FLOWS_SWEEP="0 2 4 8"
+CPU_STRESS_WORKERS=(${CPU_WORKERS_SWEEP:-0 1 3 7})
 # Block noise = fio 동시 job 수 (같은 디바이스 $HDD_MOUNT에 연속 버퍼드+fsync 쓰기 stressor). 0=solo(GT 기준).
 # (이전엔 compression 컨테이너 N개 상호경합=약함. victim은 항상 compression 1개; stressor만 fio.)
-BIO_STRESS_JOBS=(0 4)
+BIO_STRESS_JOBS=(${BIO_JOBS_SWEEP:-0 4})
 
 # Network noise = iperf3 stressor 강도(병렬 TCP flow 수, -P). 0=solo(stressor 없음, GT 기준).
 # (이전엔 업로더 컨테이너 수였음. victim은 항상 uploader 1개; 노이즈만 iperf3로 교체.)
 # 강도 sweep상 -P 4(≈5 flow)가 sweet spot(removal ~88%). iperf3 서버가 $MINIO_IP:5201에 떠 있어야 함.
-NET_STRESS_FLOWS=(0 4)
+NET_STRESS_FLOWS=(${NET_FLOWS_SWEEP:-0 4})
 
 # 반복 실험 횟수 (설계 K=50; 파일럿은 ITERATIONS=2 등 env로 오버라이드)
 ITERATIONS="${ITERATIONS:-50}"
