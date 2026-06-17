@@ -166,44 +166,23 @@
 
 ---
 
-## Figure 5 — 지연 오버헤드 ✅
+## Figure 5 — 오버헤드: 자원 footprint (메인) ✅
 
 - **label**: `fig:eval-overhead`
 - **claim**: C7
-- **레이아웃**: 1단
-- **증명**: 실제 사용 환경(적당한 경합)에서 PureTime 켜도 함수 실행 시간 거의 안 늘어남
-- **형태**: grouped box plot (실험 1a와 일관)
-- **X축**: victim 함수 3종 — `float` / `upload` / `compression` (실험 1 함수 그대로)
-- **Y축**: **절대 ms** (0부터 시작 — 작은 차이 과장 방지, "거의 안 변함" 정직하게)
-- **함수당 2박스** (K=50 분포):
-  - PureTime OFF (회색) — baseline
-  - PureTime ON (파랑)
-- **데이터**: 함수당 **적당한 부하 하에서** solo run K=50 × {on, off}
-  - **부하 수준**: PureTime이 실제 배포될 환경에 해당하는 *적당한 경합*(무부하의 비현실적 0%도, 극단 부하의 과장도 아닌 실사용 수준). 무부하가 아니라 현실적 경합에서 재는 이유: 이벤트가 발생해야 hook+캡처 비용이 실제로 드러남.
-  - **측정 정밀도(중요)**: PureTime 지연 오버헤드는 <1.5%로 측정 노이즈에 가깝다. victim이 부하와 **같은 코어에서 CPU를 다투면** victim의 CPU 몫 변동(±15~33%)이 신호를 묻어 중앙값까지 흔들리므로, **victim과 stressor를 별도 코어에 핀**해 CPU 쟁탈을 없앤다(이벤트는 victim 자신의 I/O/네트워크에서 발생). 추가로 **on/off 순서 counterbalance(홀짝 iteration 교대) + victim self-reported `elapsed_ms`(perf_counter, 컨테이너 startup 변동 배제) + CPU 터보 off**로 분산을 줄인다.
-- **합격 기준 (정직)**: **중앙값 오버헤드가 양수이면서 < 1.5%**. 오버헤드가 워낙 작아 **개별 측정 중 일부는 음수**(우연히 ON이 OFF보다 빠름)가 나오는데, 이는 측정 노이즈의 자연스러운 결과이며 박스의 아래 whisker가 0 밑으로 내려가도 무방하다(짜맞추지 않음). 중앙값만 양수면 충분.
-- **핵심 메시지**:
-  - 각 함수에서 on/off 두 박스 거의 겹침 = 실사용 환경에서도 오버헤드 미미 (중앙값 양수, < 1.5%)
-  - 중앙값 차이(%)를 박스 위 수치로 표기
-- **본문/캡션 명시**: "PureTime이 실제로 배포될 환경에 해당하는 적당한 부하에서 측정했고, 중앙값 오버헤드는 1.5% 미만이다. 오버헤드가 측정 노이즈보다 작아 일부 개별 측정은 음수로 나오지만(ON이 우연히 빠름), 이는 오버헤드가 무시할 수준임을 보여줄 뿐 음의 오버헤드를 주장하는 것이 아니다."
+- **레이아웃**: 1단 (2-패널 막대)
+- **증명**: PureTime의 online 비용(트레이서 CPU% + RSS)이 멀티테넌트 노드 자원의 **0.1% 미만** — 가볍고 ring buffer로 조절 가능.
+- **★ 왜 "자원"이 메인이고 "시간 오버헤드"가 아닌가 (시스템 논문 관행)**: PureTime 시간 오버헤드는 별도 userspace 프로세스(loader)가 ring buffer를 비우므로 함수 critical path에는 가벼운 커널 훅(reserve/submit)만 남아 **측정 노이즈 이하(<1%)**다. 따라서 실제 비용은 PureTime 프로세스가 노드에서 차지하는 *자원*이며, 그것을 메인 figure로 보인다. (시간 오버헤드를 box plot으로 victim 절대시간 with/without 비교하려 했으나 오버헤드<측정노이즈라 세션마다 부호가 바뀌어 실패 — 시간 오버헤드를 *메인 지표*로 내세우는 것 자체가 부적절. 곡선은 그 스케일링을 보이는 *보조*다.)
+- **형태**: 2-패널 막대, Y축 = **% of node resource** (작게 보여 "낮음"을 정직 시각화; 0.1% 기준선)
+  - **(a) CPU**: victim 3종(`float`/`upload`/`compression`), 노드 24코어 대비 **0.05~0.08%**(= 한 코어의 1~2%; 이벤트율 따라 victim별 차이 — float이 switch 많아 최고). 막대 라벨에 한 코어% 병기.
+  - **(b) Memory(RSS)**: **단일 막대**(victim 무관 일정), 노드 RAM(94GB) 대비 **0.075%**(= ~71MB). ring buffer 크기가 지배(32MB 측정 빌드; 512MB 기본 → ~1GB) → 조절 가능.
+- **online만**: eBPF hooks + Loader. **Analyzer 제외**(offline, critical path 밖) 캡션 명시.
+- **측정 빌드**: `events` 맵 32MB(RSS ~71MB). 512MB 기본(RSS~1GB) 아닌 *측정용*임을 캡션 명시.
+- **파일**: `fig4_overhead_resource.pdf` (plotter `plot_overhead_resource.py`; 옛 시계열 스파이크 plot은 폐기).
 
----
-
-## Table — 자원 사용량 ✅
-
-- **label**: `tab:eval-resource`
-- **claim**: C7
-- **형태**: 표 (figure 아님)
-- **행**: PureTime online 구성요소 — eBPF hooks + Loader
-  - **Analyzer 제외** (offline, critical path 밖) 명시
-- **열**: CPU 사용률(%), 메모리 RSS (MB)
-- **데이터**: online 측정
-  - **측정 조건**: Figure 5와 **동일한 적당한 부하** (지연·자원을 같은 환경에서 측정해 일관)
-    - CPU%는 이벤트 발생량에 직접 비례하므로 적당한 부하에서 재야 정직
-  - **ring buffer 32MB 빌드로 측정** (RSS ~70MB)
-    - 512MB(기본, RSS~1GB)가 아닌 *측정용 32MB*임을 캡션/본문 명시 (안 그러면 "1GB 먹네" 오해)
-    - `src/puretime.bpf.c`의 `events` 맵 `max_entries`를 32MB로 내려 빌드
-- **핵심**: CPU% 낮음, RSS는 ring buffer 크기가 지배적이라 *조절 가능*
+### Figure 5-보조 — 시간 오버헤드 스케일링 (이벤트율 곡선)
+- **claim**: C7 (보조). PureTime 시간 오버헤드는 추적하는 **커널 이벤트 수에 비례**한다. 실제 함수 절대시간으론 노이즈 이하라 직접 측정이 불안정하므로(box plot 실패의 근본 이유), **이벤트율(switch/s)을 x축으로 sweep**해 "오버헤드 ∝ 이벤트율" 곡선으로 보조 제시 — victim=`ctxsw-bench`(부모-자식 pipe 핑퐁: sched_switch를 결정적 생성, 같은 코어 협력 실행이라 CPU 경쟁 노이즈 없음). 현실 함수율(~12K switch/s)에서 <1%, 극단(717K)에서도 곡선상 예측 가능. 메인(자원)의 "시간 오버헤드가 왜 작은지"를 정량 뒷받침.
+- **파일**: `fig3_overhead_time.pdf` (`plot_overhead_ctxsw.py`). inset/appendix 또는 본문 보조.
 
 ---
 
@@ -216,12 +195,12 @@
 | 2 | `fig:eval-merge` | line | 겹침비율 (Σwait−union)/Σwait | 정규화 | C3 | 1단 | ✅ | `fig7_interval_merge.pdf` |
 | 3 | `fig:eval-input-dynamic` | 시계열 | 호출순서 1~30 | 절대 ms | C5 | 1단 | ✅ | `fig5_input_variance.pdf` |
 | 4 | `fig:eval-baseline` | 시계열+band | 호출순서 1~30 | 절대 ms | C6·8·9 | 1단(+KPA분리) | ✅ | `fig6_baseline_comparison.pdf` |
-| 5 | `fig:eval-overhead` | box | victim 3종 | 절대 ms | C7 | 1단 | ⏳ 측정 | (box plot 측정 예정) |
-| 표 | `tab:eval-resource` | table | — | — | C7 | — | ✅ | `fig4_overhead_resource.pdf` |
+| 5 | `fig:eval-overhead` | 막대(2-패널) | victim 3종 | % of node | C7 | 1단 | ✅ | `fig4_overhead_resource.pdf` (자원 메인) |
+| 5-보조 | — | 곡선 | switch/s | overhead% | C7 | 보조 | ✅ | `fig3_overhead_time.pdf` (이벤트율) |
 
-- **개수**: figure 6개(1b 포함) + 표 1개. §5 ~3.5pp에 적정.
+- **개수**: figure 6개(1b 포함) + 오버헤드 보조 곡선 1개. §5 ~3.5pp에 적정.
 - **⚠️ 파일명 주의**: 위 "논문 figure 번호"와 실제 생성 파일명(`fig1~7`)이 다름(생성 순서로 명명됨). 최종 figure 생성 시 파일명을 논문 번호에 맞춰 정리 권장.
-- **Figure 5 결정(2026-06-17)**: **box plot만**(곡선 제거). 실제 함수(float/upload/compression) on/off, victim·stressor 별도 코어 핀, 중앙값 양수 <1.5%. 이벤트율 곡선(ctxsw) 방식은 합성 벤치마크의 인위적 이벤트율 함수라 "실제 함수 오버헤드"를 직접 주장 못 해 **폐기** → `ctxsw-bench`/`exp_overhead_ctxsw.sh`/`plot_overhead_ctxsw.py`/`data/overhead_ctxsw`/곡선 fig3는 정리 대상.
+- **Figure 5 결정(2026-06-18)**: 오버헤드 메인 = **자원 footprint(fig4: CPU%/RSS, % of node)**, 시간 오버헤드는 critical-path 분석 + 이벤트율 곡선(fig3 ctxsw) **보조**. box plot은 시간 오버헤드(<1%)가 측정 노이즈보다 작아 세션마다 부호가 바뀌어 **폐기**(부하·throttle·K 조정 다 실패 — 시간 오버헤드를 *메인 지표*로 내세우는 게 PureTime엔 부적절; 별도 프로세스라 critical path 비용이 본질적으로 작음). 곡선(ctxsw)은 *보조*로 유지(폐기 안 함).
 
 ---
 

@@ -600,7 +600,9 @@ def main():
         if f3:
             generated.append(f3)
 
-    if df_res is not None:
+    # fig4 (resource overhead) is now the bar-summary from plot_overhead_resource.py (% of node).
+    # Keep this old CPU%-timeseries plot for reference but gate it so it doesn't clobber the new fig4.
+    if df_res is not None and os.environ.get("PLOT_LEGACY_FIG4"):
         f4 = fig_overhead_resource(df_res, output_dir, fmt)
         if f4:
             generated.append(f4)

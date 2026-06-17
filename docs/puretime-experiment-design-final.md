@@ -98,9 +98,9 @@
 
 ### 실험 방법
 
-- **(A) 지연 오버헤드 — ★ 2026-06-17 재설계 (아래 "설계 변경" 참조):** PureTime 지연 오버헤드는 추적하는 **커널 이벤트 수에 비례**한다. 따라서 victim 절대 실행시간을 비교하는 대신, **이벤트율(context-switch/s)을 x축으로 sweep**해 "이벤트율 vs 오버헤드" 곡선을 그린다. victim = `ctxsw-bench`(부모-자식 pipe 핑퐁: sched_switch를 결정적으로 생성, 같은 코어 협력 실행이라 CPU 경쟁 노이즈 없음; `COMPUTE_PER_ROUND`로 이벤트율 제어). 같은 워크로드를 with/without PureTime으로 K=15 측정(순서 counterbalance + CPU 터보 off + self-reported elapsed_ms).
-- **(B) 자원 오버헤드:** PureTime 프로세스가 쓰는 CPU%·RSS 측정(절대 프로파일링).
-- 오버헤드는 **online(eBPF hook + Loader 캡처)만** 고려. Analyzer는 offline에 수행되는 task로 critical path에 존재하지 않으므로 리소스 사용량/지연에서 제외(본문 명시)
+- **★ 메인 = 자원 오버헤드 (2026-06-18 확정):** PureTime online 비용 = 프로세스가 쓰는 CPU%·RSS를 **노드 자원 대비**로 측정(`fig4`, `plot_overhead_resource.py`). 실측: 노드(24코어/94GB RAM)의 **<0.1%** — CPU 0.05~0.08%(= 한 코어 1-2%; victim별 이벤트율 차이), RSS 71MB = 노드 RAM의 0.075%(ring buffer 32MB 지배·조절가능). **시간 오버헤드를 메인으로 안 쓰는 이유**: PureTime은 별도 userspace 프로세스(loader)가 ring buffer를 비우므로 함수 critical path엔 가벼운 커널 훅만 남아 시간 오버헤드가 **측정 노이즈 이하(<1%)** — 시스템 논문 관행상 *실제 비용은 자원*이고, 시간은 critical-path 분석+곡선으로 보조한다.
+- **보조 = 시간 오버헤드 스케일링 (이벤트율 곡선):** 지연 오버헤드는 추적 **이벤트 수에 비례**. 실제 함수 절대시간으론 노이즈 이하라 직접 측정 불안정(아래 "설계 변경" — box plot 실패) → **이벤트율(context-switch/s)을 sweep**해 "오버헤드 ∝ 이벤트율" 곡선(`fig3`). victim = `ctxsw-bench`(부모-자식 pipe 핑퐁: sched_switch 결정적·협력적 생성, CPU 경쟁 노이즈 없음; `COMPUTE_PER_ROUND`로 이벤트율 제어). 현실 함수율(~12K switch/s)에서 <1%. 메인(자원)의 "시간 오버헤드가 왜 작은지"를 정량 뒷받침.
+- 오버헤드는 **online(eBPF hook + Loader 캡처)만** 고려. Analyzer는 offline task로 critical path 밖이라 제외(본문 명시).
 - **Ring buffer 크기 주의**: 기본값은 고부하/경합 실험에서 드롭을 막으려고 **512MB**로 둔다(RSS ~1GB). 하지만 **이 오버헤드 측정에서는 RSS가 곧 측정 대상**이므로, `src/puretime.bpf.c`의 `events` 맵 `max_entries`를 **32MB로 내려서 빌드**한 뒤 측정한다(RSS ~70MB). 본문에는 측정에 쓴 크기를 명시. (드롭 발생 시 trailer의 `dropped_events>0` → 해당 run 무효, 크기 상향 후 재실행.)
 
 ### ⚠️ 설계 변경: w/vs w/o box plot → 이벤트율 vs 오버헤드 곡선 (이유)
@@ -110,11 +110,12 @@
 - PureTime 지연 오버헤드는 **<1%로 측정 노이즈보다 작다**(트레이서가 별도 프로세스로 ring buffer를 drain, 커널 훅은 가벼움 → victim CPU를 거의 안 뺏음). 조용한 환경 w/vs w/o로는 절반이 음수(우연히 with가 빠름)로 나와 리뷰어가 의심한다.
 - 부하를 줘 이벤트를 만들면 PureTime이 일하지만(측정 가능), victim을 부하와 **같은 코어에서 경쟁**시키면 CPU 몫 변동(±15~33%)이 ~1% 신호를 다시 묻는다(별도 코어=이벤트 없음=0).
 - 해결: `ctxsw-bench`가 부모-자식 핑퐁으로 sched_switch를 **결정적·협력적으로** 생성 → CPU 쟁탈 없이 이벤트율만 제어. 이벤트율을 sweep하면 노이즈 없는 단조-양수 곡선.
+- **★ 2026-06-18 — 곡선도 *메인*이 아닌 *보조*로 확정**: box plot 실패로 곡선으로 갔지만, 곡선(합성 `ctxsw` 벤치마크)을 *시간 오버헤드 메인 지표*로 내세우는 것도 부적절하다(시스템 논문은 실제 워크로드 측정을 메인으로, 합성 마이크로벤치 곡선은 보조로 둠 — 곡선 단독은 "실제 함수 오버헤드"를 직접 주장 못 함). 실제 함수 box plot도 시도했으나 오버헤드<측정노이즈라 세션마다 부호가 바뀜(부하·throttle·K 조정 다 실패). 근본은 PureTime이 **별도 프로세스라 시간 오버헤드가 본질적으로 작다**는 것 → **오버헤드 메인은 자원(fig4: CPU%/RSS, % of node)**, 시간 오버헤드는 "critical path엔 커널 훅만 → 노이즈 이하"로 서술 + 곡선으로 스케일링을 *보조* 제시.
 
-### Figure (`fig3_overhead_time.pdf`, `plot_overhead_ctxsw.py`)
+### Figure — 메인 `fig4_overhead_resource.pdf` (`plot_overhead_resource.py`) + 보조 `fig3_overhead_time.pdf` (`plot_overhead_ctxsw.py`)
 
-- **(A) fig3**: x=커널 이벤트율(×1000 context-switch/s), y=지연 오버헤드(%), 95% CI 에러바 + 선형 fit. **실측: 28K→717K switch/s에서 +2.2%→+44.4% 단조-선형, 전 구간 양수**(음수≈0) — "오버헤드는 이벤트율에 선형 비례, 현실적 함수율에서 낮음".
-- **(B)**: PureTime 자체 자원(CPU~1%/RSS 71MB, events 맵 32MB) — 본문/Table 또는 fig4.
+- **메인 fig4 (자원)**: 2-패널 막대, y=% of node resource. **(a) CPU**: victim 3종, 노드 24코어 대비 0.05~0.08%(= 한 코어 1-2%, 라벨 병기) + 0.1% 기준선. **(b) Memory**: 단일 막대, 노드 RAM 대비 0.075%(=71MB), ring buffer 분해(32MB tunable + base). "PureTime online < 0.1% of node CPU & RAM". (옛 CPU% 시계열 스파이크 plot은 폐기.)
+- **보조 fig3 (시간 스케일링)**: x=커널 이벤트율(×1000 switch/s), y=지연 오버헤드(%), 95% CI + 선형 fit + <1.5% inset. **실측: 12K→717K switch/s에서 +0.86%→+44.4% 단조-양수**(현실 함수율 ~12K에서 +0.86% <1.5%) — "오버헤드는 이벤트율에 선형 비례, 현실율에서 낮음". 메인(자원)을 뒷받침.
 
 ---
 
