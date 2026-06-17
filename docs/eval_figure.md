@@ -63,14 +63,15 @@
 
 ---
 
-## Figure 1b — 강도별 robustness ✅ (CPU + Network, Block 제외)
+## Figure 1b — 강도별 robustness ✅ (CPU·Net line + Block 대표 점)
 
 - **label**: `fig:eval-robustness`
 - **claim**: C2
 - **레이아웃**: 1단
-- **데이터 (2026-06-17 측정 완료)**: **CPU**(stress worker 0/1/3/7 = solo+3강도) + **Network**(iperf3 `-P` 0/2/4/8). 둘 다 강도↑에도 removal 유지: **Network 72%/90%/83% @ wall 2.85/4.71/8.39×**(robust), CPU도 sweep 보유. → CPU+Network 2-패널 또는 2색 line으로 robustness 표시.
-- **Block 제외 (정직)**: Block 강도 sweep도 측정했으나(`fio job 2/4/8`), **removal이 HDD 물리 상태에 좌우됨**이 드러나 1b에서 뺀다. 빈 디스크에선 35~45%, 채워진(현실적) 디스크에선 91%로, queue_depth=2가 걸려 있어도 *디스크 채움 상태*가 결과를 가른다(둘 다 std 7~8로 내부 안정 → 측정 노이즈 아닌 환경 레짐). Block은 **1a의 대표 강도(채워진 디스크에서 91%)**만 쓰고, robustness 곡선은 CPU·Network로 보인다. (자세한 건 §7 한계 + CLAUDE.md "filled HDD" 전제.)
-- **증명**: 강도↑에도 Pure가 solo에 계속 붙음 (CPU·Network)
+- **형태**: line chart, **X축 = slowdown(wall/solo) = 경합 강도**, **Y축 = removal%**(= (E2E−Pure)/(E2E−solo), 제거된 노이즈 비율). robustness는 **removal%**로 본다 — nf/solo는 같은 잔차를 slowdown 배수만큼 증폭해 (removal이 일정해도) 우상향처럼 보이므로 부적합.
+- **세 자원** (2026-06-17 측정): **CPU**(stress worker 1/3/7) **99/98/98% @ 1.76/2.25/3.03×** — 거의 100% 평탄. **Network**(iperf3 -P 2/4/8) **72/90/83% @ 2.85/4.69/8.37×** — 70~90% 유지. **Block**(fio job 4) **91% @ 3.15× — 단일 대표 점**(line 아님): block removal은 HDD 물리 상태(채워진 디스크 91% ↔ 빈 디스크 45%, 둘 다 std 7~8로 내부 안정 → 디스크 *상태* 차이지 노이즈 아님)에 좌우돼 강도 sweep을 동일 디스크 상태로 통제 불가(§7 + CLAUDE.md "filled HDD" 전제). 그래서 1a의 대표 점만 찍고 "disk-dependent" 주석 — 3자원을 다 보여 1a와 대칭을 유지하되 block의 디스크 의존성은 정직하게 드러낸다.
+- **데이터 소스**: CPU·Block = `accuracy_K50/accuracy_results.csv`, Network = `robustness_1b/results.csv` (pairwise: 같은 iteration의 solo로 정규화). plotter `plot_exp1b_robustness.py` → `fig1b_robustness.pdf`.
+- **증명**: 강도↑(slowdown 1.8→8.4×)에도 removal이 무너지지 않고 유지(CPU ~98%, Net 70~90%, Block 91%).
 - **형태**: line chart (자원별 색 또는 panel 3개)
 - **X축**: **slowdown 배수** (solo 대비 wall, 1.0×·1.3×·1.7×·2.0×...) — 자원 단위 차이를 한 축으로 통일
 - **Y축**: solo 정규화 (solo=1.0)
@@ -211,7 +212,7 @@
 | # | label | 형태 | X축 | Y축 | claim | 레이아웃 | 상태 | 실제 생성 파일 |
 |---|---|---|---|---|---|---|---|---|
 | 1a | `fig:eval-accuracy` | box | victim 3종 | 정규화 | C1 | 1단 | ✅ | `fig1_accuracy_baseline.pdf` |
-| 1b | `fig:eval-robustness` | line | slowdown 배수 | 정규화 | C2 | 1단 | ✅ CPU+Net | (신규; Block은 HDD의존이라 제외) |
+| 1b | `fig:eval-robustness` | line+점 | slowdown 배수 | removal% | C2 | 1단 | ✅ | `fig1b_robustness.pdf` (CPU·Net line + Block 대표점) |
 | 2 | `fig:eval-merge` | line | 겹침비율 (Σwait−union)/Σwait | 정규화 | C3 | 1단 | ✅ | `fig7_interval_merge.pdf` |
 | 3 | `fig:eval-input-dynamic` | 시계열 | 호출순서 1~30 | 절대 ms | C5 | 1단 | ✅ | `fig5_input_variance.pdf` |
 | 4 | `fig:eval-baseline` | 시계열+band | 호출순서 1~30 | 절대 ms | C6·8·9 | 1단(+KPA분리) | ✅ | `fig6_baseline_comparison.pdf` |
