@@ -73,18 +73,15 @@ def main():
         ax.bar(x[i] + w / 2, [wi_n.mean()], w, color="#3182bd", edgecolor="black", lw=0.6, zorder=3,
                yerr=ci95(wi_n), capsize=4, error_kw=dict(lw=1.2),
                label="PureTime ON" if i == 0 else None)
-        p = paired_p(wi, wo)
-        sig = "n.s." if (np.isnan(p) or p > 0.05) else f"p={p:.3f}"
-        ax.annotate(sig if sig == "n.s." else f"p={p:.2f}", (x[i], 102.6), ha="center",
-                    fontsize=9, color="#2e7d32" if sig == "n.s." else "#444", fontweight="bold")
+        # p-value 라벨은 figure에서 생략(본문/캡션에 paired t-test로 보고). 콘솔 요약에는 아래에 출력.
 
     ax.axhline(100, color="#333", lw=1.0, ls="--", zorder=1)
     ax.set_xticks(x)
     ax.set_xticklabels([VLABEL[v] for v in vics], fontsize=10.5)
     ax.set_ylabel("Execution time\n(% of PureTime-OFF)", fontsize=11.5)
     ax.tick_params(axis="y", labelsize=10)
-    ax.set_ylim(96, 104)
-    ax.legend(fontsize=9.5, loc="lower center", ncol=2, framealpha=0.92)
+    ax.set_ylim(70, 130)   # 100%가 중앙, ON/OFF 차이는 60%p 범위 안에서 미미하게
+    ax.legend(fontsize=9.5, loc="upper center", ncol=2, framealpha=0.92)
     fig.tight_layout()
 
     os.makedirs(args.out, exist_ok=True)
