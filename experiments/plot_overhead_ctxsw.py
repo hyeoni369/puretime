@@ -67,7 +67,6 @@ def main():
 
     ax.set_xlabel("Kernel-event rate (×1000 context-switches / sec)")
     ax.set_ylabel("Time overhead (%)")
-    ax.set_title("PureTime overhead scales linearly with event rate", fontsize=8.5)
     ax.legend(fontsize=6.5, framealpha=0.9, loc="upper left")
     ax.set_ylim(bottom=min(-1, means.min() - 2))
 

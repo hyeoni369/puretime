@@ -71,30 +71,35 @@ def main():
     fig, ax = plt.subplots(figsize=(4.2, 3.0))
     ax.axhline(100, color="#37474f", lw=1.0, ls="--", label="100% (perfect removal)", zorder=1)
 
-    def plot_line(d, color, marker, label):
-        xs = [d[s][0] for s in sorted(d, key=lambda s: d[s][0])]
-        ys = [d[s][1] for s in sorted(d, key=lambda s: d[s][0])]
-        lo = [d[s][2] for s in sorted(d, key=lambda s: d[s][0])]
-        hi = [d[s][3] for s in sorted(d, key=lambda s: d[s][0])]
+    # X축 = 저/중/고 카테고리: 각 자원의 약/중/강 강도를 같은 x에 정렬해 3자원 패턴이 겹치게
+    # (자원마다 slowdown 절대범위가 달라 — CPU 1.8~3×, Net 4.7~8.4× — 그대로 그리면 떨어져 보임).
+    def plot_line(d, strengths, color, marker, label):
+        xs = list(range(len(strengths)))  # 0=low, 1=mid, 2=high
+        ys = [d[s][1] for s in strengths]
+        lo = [d[s][2] for s in strengths]
+        hi = [d[s][3] for s in strengths]
         ax.fill_between(xs, lo, hi, color=color, alpha=0.15, zorder=2)
-        ax.plot(xs, ys, marker + "-", color=color, ms=5, lw=1.5, label=label, zorder=3)
+        ax.plot(xs, ys, marker + "-", color=color, ms=7, lw=2.0, label=label, zorder=3)
 
-    plot_line(cpu, "#1565c0", "o", "CPU")
-    plot_line(net, "#2e7d32", "s", "Network")
-    # Block: single representative point (disk-state-dependent, not a sweep)
+    plot_line(cpu, ["1", "3", "7"], "#1565c0", "o", "CPU (1.8–3.0×)")
+    plot_line(net, ["4", "6", "8"], "#2e7d32", "s", "Network (4.7–8.4×)")
+    # Block: single representative point at mid (disk-state-dependent, not a sweep)
     if "4" in blk:
-        bx, by = blk["4"][0], blk["4"][1]
-        ax.errorbar([bx], [by], yerr=[[by - blk["4"][2]], [blk["4"][3] - by]], fmt="^",
-                    color="#c62828", ms=8, capsize=3, lw=1.2, zorder=4,
-                    label="Block (single pt — disk-dependent)")
-        ax.annotate(f"{by:.0f}%", (bx, by), textcoords="offset points",
-                    xytext=(8, -3), fontsize=7, color="#b71c1c")
+        by = blk["4"][1]
+        ax.errorbar([1], [by], yerr=[[by - blk["4"][2]], [blk["4"][3] - by]], fmt="^",
+                    color="#c62828", ms=11, capsize=3, lw=1.2, zorder=4,
+                    label="Block (3.2×, single pt)")
+        ax.annotate(f"{by:.0f}%", (1, by), textcoords="offset points",
+                    xytext=(10, -3), fontsize=9, color="#b71c1c", fontweight="bold")
 
-    ax.set_xlabel("Slowdown (wall / solo) = contention strength")
-    ax.set_ylabel("Noise removed (%)")
-    ax.set_title("Removal holds as contention intensity rises", fontsize=8.5)
-    ax.legend(fontsize=6.5, framealpha=0.9, loc="lower left")
-    ax.set_ylim(40, 105)
+    ax.set_xticks([0, 1, 2]); ax.set_xticklabels(["low", "mid", "high"], fontsize=11)
+    ax.set_xlabel("Contention level (per-resource strength sweep)", fontsize=11)
+    ax.set_ylabel("Noise removed (%)", fontsize=11)
+    ax.tick_params(axis="y", labelsize=10)
+    ax.legend(fontsize=7.5, framealpha=0.9, loc="lower left", ncol=1)
+    ax.set_ylim(0, 110)
+    ax.set_xlim(-0.4, 2.4)
+    ax.grid(axis="y", ls=":", alpha=0.3)
 
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)

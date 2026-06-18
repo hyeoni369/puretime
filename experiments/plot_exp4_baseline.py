@@ -94,32 +94,34 @@ def main():
     pods_true = int(np.ceil(conc_pt.mean() / THRESH))
     pods_noisy = int(np.ceil(conc_e2e.mean() / THRESH))
 
-    fig, (axA, axB) = plt.subplots(1, 2, figsize=(7.0, 2.8))
-
-    # Panel A
+    os.makedirs(args.out, exist_ok=True)
+    # ---- fig6a: CloudWatch anomaly detection ----
+    figA, axA = plt.subplots(figsize=(4.3, 3.0))
     axA.fill_between([x[0], x[-1]], [lo, lo], [hi, hi], color="#90a4ae", alpha=0.25,
                      label="CloudWatch band (μ±2σ)")
     axA.plot(x, e2e, "-s", color="#c62828", ms=2.5, lw=1.0, label=f"Noisy wall (false alarms: {e2e_fa}/{len(x)})")
     axA.plot(x, pt, "-^", color="#1565c0", ms=2.5, lw=1.0, label=f"PureTime (false alarms: {pt_fa}/{len(x)})")
     axA.axhline(hi, color="#607d8b", lw=0.8, ls="--")
-    axA.set_title("CloudWatch anomaly detection", fontsize=8)
-    axA.set_xlabel("Invocation (random inputs)"); axA.set_ylabel("Exec time (ms)")
-    axA.legend(fontsize=6, framealpha=0.9, loc="upper left"); axA.set_ylim(bottom=0)
+    axA.set_xlabel("Invocation (random inputs)", fontsize=10); axA.set_ylabel("Exec time (ms)", fontsize=10)
+    axA.tick_params(labelsize=9)
+    axA.set_ylim(0, max(float(np.max(e2e)), hi) * 1.55)   # legend 공간 확보(그래프 안 가리게)
+    axA.legend(fontsize=7.5, framealpha=0.95, loc="upper left")
+    figA.tight_layout()
+    pa = os.path.join(args.out, f"fig6a_baseline_comparison.{args.format}")
+    figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
 
-    # Panel B
+    # ---- fig6b: Knative KPA ----
+    figB, axB = plt.subplots(figsize=(4.3, 3.0))
     axB.axhline(THRESH, color="#37474f", lw=1.0, ls="--", label=f"scale-out @ {THRESH:.0f}/pod")
     axB.plot(x, conc_e2e, "-s", color="#c62828", ms=2.5, lw=1.0, label=f"Noisy → {pods_noisy} pods")
     axB.plot(x, conc_pt, "-^", color="#1565c0", ms=2.5, lw=1.0, label=f"PureTime → {pods_true} pod(s)")
-    axB.set_title("Knative KPA (Little's Law, concurrency=λ·T)", fontsize=8)
-    axB.set_xlabel("Invocation (random inputs)"); axB.set_ylabel("Est. concurrency (req)")
-    axB.legend(fontsize=6, framealpha=0.9, loc="upper left"); axB.set_ylim(bottom=0)
-
-    fig.suptitle(f"Statistical baselines on noisy wall vs PureTime ({args.victim})", fontsize=9)
-    fig.tight_layout()
-    os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"fig6_baseline_comparison.{args.format}")
-    fig.savefig(path, dpi=200, bbox_inches="tight")
-    print(f"Saved: {path}")
+    axB.set_xlabel("Invocation (random inputs)", fontsize=10); axB.set_ylabel("Est. concurrency (req)", fontsize=10)
+    axB.tick_params(labelsize=9)
+    axB.set_ylim(0, max(float(np.max(conc_e2e)), THRESH) * 1.55)
+    axB.legend(fontsize=7.5, framealpha=0.95, loc="upper left")
+    figB.tight_layout()
+    pb = os.path.join(args.out, f"fig6b_baseline_comparison.{args.format}")
+    figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")
     print(f"[A] CloudWatch false alarms — noisy wall {e2e_fa}/{len(x)} vs PureTime {pt_fa}/{len(x)}")
     print(f"[B] KPA pods — noisy {pods_noisy} (over-provision +{pods_noisy-pods_true}) vs PureTime {pods_true}; "
           f"λ={lam:.1f} req/s, mean T noisy {e2e.mean():.0f}ms / true {pt.mean():.0f}ms")

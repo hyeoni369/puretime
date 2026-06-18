@@ -64,40 +64,38 @@ def main():
     if not victims:
         print("No known victims in data."); return
 
-    fig, axes = plt.subplots(1, len(victims), figsize=(3.4 * len(victims), 2.8), squeeze=False)
-    for ax, victim in zip(axes[0], victims):
-        # solo (G.T.): use t_e2e at condition=solo (≈ t_puretime, no noise)
+    os.makedirs(args.out, exist_ok=True)
+    name_map = {"float": "fig5a_input_variance", "face": "fig5b_input_variance"}  # a=float, b=face
+    for victim in victims:
+        fig, ax = plt.subplots(figsize=(3.9, 2.9))
+        # solo (G.T.): t_e2e at condition=solo; stress: e2e (noisy wall) + noise-free (PureTime)
         xs, solo, solo_ci = agg(df, victim, "solo", "t_e2e_ms")
-        # stress: e2e (noisy wall) and noise-free (PureTime)
         xe, e2e, e2e_ci = agg(df, victim, "stress", "t_e2e_ms")
         xp, pt, pt_ci = agg(df, victim, "stress", "t_puretime_ms")
 
-        ax.plot(xe, e2e, "-s", color=COLORS["e2e"], ms=4, lw=1.3, label="E2E w/ stress (noisy)")
+        ax.plot(xe, e2e, "-s", color=COLORS["e2e"], ms=4, lw=1.4, label="E2E w/ stress (noisy)")
         ax.fill_between(xe, e2e - e2e_ci, e2e + e2e_ci, color=COLORS["e2e"], alpha=0.15)
-        ax.plot(xs, solo, "-o", color=COLORS["solo"], ms=4, lw=1.3, label="Solo (G.T.)")
+        ax.plot(xs, solo, "-o", color=COLORS["solo"], ms=4, lw=1.4, label="Solo (G.T.)")
         ax.fill_between(xs, solo - solo_ci, solo + solo_ci, color=COLORS["solo"], alpha=0.15)
-        ax.plot(xp, pt, "--^", color=COLORS["pt"], ms=4, lw=1.3, label="PureTime (noise-free)")
+        ax.plot(xp, pt, "--^", color=COLORS["pt"], ms=4, lw=1.4, label="PureTime (noise-free)")
         ax.fill_between(xp, pt - pt_ci, pt + pt_ci, color=COLORS["pt"], alpha=0.15)
 
-        # report per-input recovery error (noise-free vs solo)
         solo_map = dict(zip(xs, solo))
         errs = [abs(p - solo_map[x]) / solo_map[x] * 100 for x, p in zip(xp, pt) if x in solo_map and solo_map[x] > 0]
         med_err = np.median(errs) if errs else float("nan")
-
-        ax.set_title(f"{VICTIM_LABEL.get(victim, victim)}\nPureTime↔Solo median err {med_err:.1f}%", fontsize=8)
-        ax.set_xlabel("Input level")
-        ax.set_ylabel("Execution Time (ms)")
-        ax.legend(fontsize=6.5, framealpha=0.9)
+        ax.set_xlabel("Input level", fontsize=10)
+        ax.set_ylabel("Execution Time (ms)", fontsize=10)
+        ax.tick_params(labelsize=9)
+        ax.legend(fontsize=8, framealpha=0.9)
         ax.set_ylim(bottom=0)
         if victim == "float":
             ax.set_xscale("log")
         print(f"[{victim}] PureTime↔Solo recovery error: median {med_err:.1f}% over inputs {list(xs)}")
 
-    fig.tight_layout()
-    os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"fig5_input_variance.{args.format}")
-    fig.savefig(path, dpi=200, bbox_inches="tight")
-    print(f"Saved: {path}")
+        fig.tight_layout()
+        path = os.path.join(args.out, f"{name_map[victim]}.{args.format}")
+        fig.savefig(path, dpi=200, bbox_inches="tight")
+        print(f"Saved: {path}")
 
 
 if __name__ == "__main__":

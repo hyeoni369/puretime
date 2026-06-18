@@ -82,64 +82,58 @@ def main():
         raise SystemExit("no usable rows")
     levels.sort(key=lambda L: np.median(L["overlap"]))  # x축(겹침) 단조 정렬
 
-    fig, (axA, axB) = plt.subplots(1, 2, figsize=(7.2, 2.9))
-
-    # ---- Panel A: efficiency vs overlap ratio (all stress runs pooled) ----
+    os.makedirs(args.out, exist_ok=True)
     ov = np.concatenate([L["overlap"] for L in levels])
     me = np.concatenate([L["merged_eff"] for L in levels])
     na = np.concatenate([L["naive_eff"] for L in levels])
     order = np.argsort(ov)
     ov, me, na = ov[order], me[order], na[order]
-
     ymin = min(-0.1, float(na.min()) - 0.1)
-    axA.axhspan(ymin, 0.0, color="#ffcdd2", alpha=0.5, zorder=0)
-    axA.text(ov.max(), ymin / 2, "impossible (nf < 0)", fontsize=6, color="#b71c1c",
-             ha="right", va="center")
-    axA.axhline(1.0, color="#37474f", lw=1.0, ls="--", label="solo (ideal = 1.0)")
-    axA.scatter(ov * 100, na, s=16, color="#c62828", marker="s",
-                label="naive (Σ waits)", zorder=3)
-    axA.scatter(ov * 100, me, s=16, color="#1565c0", marker="^",
-                label="interval-merge (∪ waits)", zorder=3)
-    # trend lines (median per level)
     lv_ov = [np.median(L["overlap"]) * 100 for L in levels]
     lv_me = [np.median(L["merged_eff"]) for L in levels]
     lv_na = [np.median(L["naive_eff"]) for L in levels]
     k = np.argsort(lv_ov)
+
+    # ---- fig7a: efficiency vs overlap ratio (scatter + trend) ----
+    figA, axA = plt.subplots(figsize=(4.4, 3.0))
+    axA.axhspan(ymin, 0.0, color="#ffcdd2", alpha=0.5, zorder=0)
+    axA.text((float(ov.min()) + float(ov.max())) / 2 * 100, ymin * 0.5,
+             "impossible: nf < 0\n(faster than running alone)", fontsize=7.5, color="#b71c1c",
+             ha="center", va="center", style="italic")
+    axA.axhline(1.0, color="#37474f", lw=1.0, ls="--", label="solo (ideal = 1.0)")
+    axA.scatter(ov * 100, na, s=16, color="#c62828", marker="s", label="naive (Σ waits)", zorder=3)
+    axA.scatter(ov * 100, me, s=16, color="#1565c0", marker="^", label="interval-merge (∪ waits)", zorder=3)
     axA.plot(np.array(lv_ov)[k], np.array(lv_me)[k], color="#1565c0", lw=1.2, alpha=0.7)
     axA.plot(np.array(lv_ov)[k], np.array(lv_na)[k], color="#c62828", lw=1.2, alpha=0.7)
-    axA.set_xlabel("Measured wait overlap (% of makespan)")
-    axA.set_ylabel("Efficiency  noise_free / solo")
-    axA.set_title("Interval-merge stays valid; naive over-subtracts", fontsize=8)
-    axA.set_ylim(bottom=ymin)
-    axA.legend(fontsize=6, framealpha=0.9, loc="center left")
+    axA.set_xlabel("Measured wait overlap (% of makespan)", fontsize=10)
+    axA.set_ylabel("Efficiency  noise_free / solo", fontsize=10)
+    axA.tick_params(labelsize=9)
+    axA.set_ylim(ymin, 2.05)   # 위 여백 확보 → legend(upper right)가 데이터 위에 떠 안 가림
+    axA.legend(fontsize=7.5, framealpha=0.95, loc="upper right")
+    figA.tight_layout()
+    pa = os.path.join(args.out, f"fig7a_interval_merge.{args.format}")
+    figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
 
-    # ---- Panel B: per-intensity bars solo / merged / naive ----
-    x = np.arange(len(levels))
-    w = 0.27
+    # ---- fig7b: per overlap level bars (solo / merged / naive) ----
+    figB, axB = plt.subplots(figsize=(4.4, 3.0))
+    x = np.arange(len(levels)); w = 0.27
     me_b = [med_iqr(L["merged_eff"]) for L in levels]
     na_b = [med_iqr(L["naive_eff"]) for L in levels]
     axB.bar(x - w, [1.0] * len(levels), w, color="#37474f", label="solo (=1)")
     axB.bar(x, [b[0] for b in me_b], w, color="#1565c0", label="interval-merge",
-            yerr=[[b[0] - b[1] for b in me_b], [b[2] - b[0] for b in me_b]], capsize=2,
-            error_kw=dict(lw=0.7))
+            yerr=[[b[0] - b[1] for b in me_b], [b[2] - b[0] for b in me_b]], capsize=2, error_kw=dict(lw=0.7))
     axB.bar(x + w, [b[0] for b in na_b], w, color="#c62828", label="naive",
-            yerr=[[max(0, b[0] - b[1]) for b in na_b], [b[2] - b[0] for b in na_b]], capsize=2,
-            error_kw=dict(lw=0.7))
-    axB.axhline(0.0, color="k", lw=0.8)
-    axB.axhline(1.0, color="#37474f", lw=0.8, ls="--")
-    axB.set_xticks(x)
-    axB.set_xticklabels([f"{int(np.median(L['overlap'])*100)}%" for L in levels])
-    axB.set_xlabel("Wait overlap (CPU-stress intensity ↑)")
-    axB.set_ylabel("Efficiency  noise_free / solo")
-    axB.set_title("Per overlap level", fontsize=8)
-    axB.legend(fontsize=6, framealpha=0.9, loc="upper right")
-
-    fig.suptitle("Interval-merge vs naive sum-of-waits under concurrent CPU+Net contention", fontsize=9)
-    fig.tight_layout()
-    os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"fig7_interval_merge.{args.format}")
-    fig.savefig(path, dpi=200, bbox_inches="tight")
-    print(f"Saved: {path}")
+            yerr=[[max(0, b[0] - b[1]) for b in na_b], [b[2] - b[0] for b in na_b]], capsize=2, error_kw=dict(lw=0.7))
+    axB.axhline(0.0, color="k", lw=0.8); axB.axhline(1.0, color="#37474f", lw=0.8, ls="--")
+    axB.set_xticks(x); axB.set_xticklabels([f"{int(np.median(L['overlap'])*100)}%" for L in levels], fontsize=9)
+    axB.set_xlabel("Wait overlap (CPU-stress intensity ↑)", fontsize=10)
+    axB.set_ylabel("Efficiency  noise_free / solo", fontsize=10)
+    axB.tick_params(axis="y", labelsize=9)
+    axB.set_ylim(top=1.55)   # legend 공간(위)
+    axB.legend(fontsize=7.5, framealpha=0.95, loc="upper right", ncol=3)
+    figB.tight_layout()
+    pb = os.path.join(args.out, f"fig7b_interval_merge.{args.format}")
+    figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")
     print(f"{'overlap%':>8} {'infl×':>6} {'merged/solo':>12} {'naive/solo':>11} {'n':>3}")
     for L in levels:
         print(f"{np.median(L['overlap'])*100:8.0f} {L['infl']:6.1f} "

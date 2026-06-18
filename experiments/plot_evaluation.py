@@ -65,9 +65,9 @@ STYLE_CONFIG = {
 }
 
 COLORS = {
-    "baseline":   "#2166ac",
-    "noisy":      "#d6604d",
-    "puretime":   "#4daf4a",
+    "baseline":   "#bab0ac",
+    "noisy":      "#e15759",
+    "puretime":   "#4e79a7",
     "cpu":        "#1b9e77",
     "network":    "#d95f02",
     "blkio":      "#7570b3",
@@ -182,9 +182,9 @@ def fig_accuracy_baseline(df_acc, output_dir, fmt="pdf"):
     df_stats = pd.DataFrame(stats)
     print(df_stats.to_string(index=False))
 
-    x = np.arange(len(df_stats))
-    width = 0.25
-    fig, ax = plt.subplots(figsize=(3.5, 2.6))
+    x = np.arange(len(df_stats)) * 1.25   # 그룹 간격 넓게
+    width = 0.34
+    fig, ax = plt.subplots(figsize=(5.6, 3.0))
 
     ax.bar(x - width, df_stats["baseline_mean"], width,
            yerr=df_stats["baseline_ci"], capsize=3,
@@ -193,25 +193,27 @@ def fig_accuracy_baseline(df_acc, output_dir, fmt="pdf"):
     ax.bar(x, df_stats["noisy_mean"], width,
            yerr=df_stats["noisy_ci"], capsize=3,
            color=COLORS["noisy"], edgecolor="black", linewidth=0.6,
-           hatch="//", label="Noisy (w/ Interference)", zorder=3)
+           label="Noisy (w/ Interference)", zorder=3)
     ax.bar(x + width, df_stats["puretime_mean"], width,
            yerr=df_stats["puretime_ci"], capsize=3,
            color=COLORS["puretime"], edgecolor="black", linewidth=0.6,
-           hatch="\\\\", label="PureTime (Noise-Free)", zorder=3)
+           label="PureTime (Noise-Free)", zorder=3)
 
     ax.set_xlabel("Noise Type")
     ax.set_ylabel("Execution Time (ms)")
     ax.set_xticks(x)
     ax.set_xticklabels(df_stats["type"])
     ax.legend(framealpha=0.9, edgecolor="gray", loc="upper left", fontsize=7)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(0, df_stats["noisy_mean"].max() * 1.28)   # 위쪽 여백 ↑
 
     for i, row in df_stats.iterrows():
+        # PureTime 막대 위에 efficiency 라벨. 키 큰 Noisy 막대와 안 겹치게 흰 배경 박스 + 진한 색.
         ax.annotate(f"{row['efficiency']:.1f}%",
-                    xy=(i + width, row["puretime_mean"]),
-                    xytext=(0, 8), textcoords="offset points",
-                    ha="center", va="bottom", fontsize=6.5,
-                    color="#2e7d32", fontweight="bold")
+                    xy=(i * 1.25 + width, row["puretime_mean"]),   # x 간격 1.25 반영(PureTime 막대 정렬)
+                    xytext=(0, 9), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=9, fontweight="bold",
+                    color="#0d47a1", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="#0d47a1", lw=0.8, alpha=0.95))
 
     fig.tight_layout()
     return save_figure(fig, output_dir, "fig1_accuracy_baseline", fmt)
