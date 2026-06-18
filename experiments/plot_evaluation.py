@@ -217,7 +217,7 @@ def fig_accuracy_baseline(df_acc, output_dir, fmt="pdf"):
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="#0d47a1", lw=0.8, alpha=0.95))
 
     fig.tight_layout()
-    return save_figure(fig, output_dir, "fig1_accuracy_baseline", fmt)
+    return save_figure(fig, output_dir, "accuracy_baseline", fmt)
 
 
 # ============================================================================
@@ -342,7 +342,7 @@ def fig_noise_source_identification(df_acc, output_dir, fmt="pdf"):
             ax.legend(fontsize=6, framealpha=0.9, edgecolor="gray",
                       loc="center right", markerscale=2)
 
-    return save_figure(fig, output_dir, "fig2_noise_source_id", fmt)
+    return save_figure(fig, output_dir, "noise_source_id", fmt)
 
 
 # ============================================================================

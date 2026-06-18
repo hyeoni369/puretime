@@ -88,7 +88,7 @@ def main():
     ax.legend(fontsize=11, framealpha=0.95, loc="upper right")
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
-    p = os.path.join(args.out, f"fig4_overhead_resource.{args.format}")
+    p = os.path.join(args.out, f"overhead_resource.{args.format}")
     fig.savefig(p, dpi=200, bbox_inches="tight")
     print(f"Saved: {p}")
     for v in VICTIMS:

@@ -65,7 +65,7 @@ def main():
         print("No known victims in data."); return
 
     os.makedirs(args.out, exist_ok=True)
-    name_map = {"float": "fig5a_input_variance", "face": "fig5b_input_variance"}  # a=float, b=face
+    name_map = {"float": "input_variance_float", "face": "input_variance_face"}  # a=float, b=face
     for victim in victims:
         fig, ax = plt.subplots(figsize=(3.9, 2.9))
         # solo (G.T.): t_e2e at condition=solo; stress: e2e (noisy wall) + noise-free (PureTime)

@@ -85,7 +85,7 @@ def main():
     fig.tight_layout()
 
     os.makedirs(args.out, exist_ok=True)
-    p_out = os.path.join(args.out, f"fig_overhead_e2e.{args.format}")
+    p_out = os.path.join(args.out, f"overhead_e2e.{args.format}")
     fig.savefig(p_out, dpi=200, bbox_inches="tight")
     print(f"Saved: {p_out}  (scipy={HAVE_SCIPY})")
     print(f"{'victim':>6} {'OFF(ms)':>9} {'ON(ms)':>9} {'ON/OFF':>7} {'paired-p':>9} {'verdict':>10}")

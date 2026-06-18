@@ -82,7 +82,7 @@ def main():
     fig.tight_layout()
 
     os.makedirs(args.out, exist_ok=True)
-    p = os.path.join(args.out, f"fig3_2_overhead_nodeload.{args.format}")
+    p = os.path.join(args.out, f"overhead_nodeload.{args.format}")
     fig.savefig(p, dpi=200, bbox_inches="tight")
     print(f"Saved: {p}")
     print(f"{'bg':>3} {'node/s':>10} {'median':>8} {'IQR':>16} {'drop':>5} {'n':>3}")

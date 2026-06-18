@@ -107,7 +107,7 @@ def main():
     axA.set_ylim(0, max(float(np.max(e2e)), hi) * 1.55)   # legend 공간 확보(그래프 안 가리게)
     axA.legend(fontsize=9.5, framealpha=0.95, loc="upper left")
     figA.tight_layout()
-    pa = os.path.join(args.out, f"fig6a_baseline_comparison.{args.format}")
+    pa = os.path.join(args.out, f"baseline_cloudwatch.{args.format}")
     figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
 
     # ---- fig6b: Knative KPA ----
@@ -120,7 +120,7 @@ def main():
     axB.set_ylim(0, max(float(np.max(conc_e2e)), THRESH) * 1.55)
     axB.legend(fontsize=9.5, framealpha=0.95, loc="upper left")
     figB.tight_layout()
-    pb = os.path.join(args.out, f"fig6b_baseline_comparison.{args.format}")
+    pb = os.path.join(args.out, f"baseline_kpa.{args.format}")
     figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")
     print(f"[A] CloudWatch false alarms — noisy wall {e2e_fa}/{len(x)} vs PureTime {pt_fa}/{len(x)}")
     print(f"[B] KPA pods — noisy {pods_noisy} (over-provision +{pods_noisy-pods_true}) vs PureTime {pods_true}; "

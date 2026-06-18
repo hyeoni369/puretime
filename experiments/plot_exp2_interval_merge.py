@@ -111,7 +111,7 @@ def main():
     axA.set_ylim(ymin, 2.6)   # 위 여백 확보 → legend(upper right)가 데이터 위에 떠 안 가림
     axA.legend(fontsize=9.5, framealpha=0.95, loc="upper right")
     figA.tight_layout()
-    pa = os.path.join(args.out, f"fig7a_interval_merge.{args.format}")
+    pa = os.path.join(args.out, f"interval_merge_scatter.{args.format}")
     figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
 
     # ---- fig7b: per overlap level bars (solo / merged / naive) ----
@@ -136,7 +136,7 @@ def main():
     axB.legend([h[i] for i in o], [l[i] for i in o], fontsize=9.5,
                framealpha=0.95, loc="upper right", ncol=2)
     figB.tight_layout()
-    pb = os.path.join(args.out, f"fig7b_interval_merge.{args.format}")
+    pb = os.path.join(args.out, f"interval_merge_bars.{args.format}")
     figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")
     print(f"{'overlap%':>8} {'infl×':>6} {'merged/solo':>12} {'naive/solo':>11} {'n':>3}")
     for L in levels:

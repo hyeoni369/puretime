@@ -103,7 +103,7 @@ def main():
 
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"fig1b_robustness.{args.format}")
+    path = os.path.join(args.out, f"robustness.{args.format}")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     print(f"Saved: {path}")
     for name, d in [("CPU", cpu), ("Net", net), ("Block", blk)]:

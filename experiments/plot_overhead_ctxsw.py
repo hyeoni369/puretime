@@ -94,7 +94,7 @@ def main():
 
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
-    path = os.path.join(args.out, f"fig3_overhead_time.{args.format}")
+    path = os.path.join(args.out, f"overhead_eventrate.{args.format}")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     print(f"Saved: {path}")
     print(f"{'switch/s':>10} {'overhead':>10} {'95%CI':>14} {'n':>3}")
