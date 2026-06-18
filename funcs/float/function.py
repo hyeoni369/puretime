@@ -11,11 +11,14 @@ LLC/메모리 대역폭 경합(= PureTime 범위 밖 on-CPU IPC dilation)을 유
 """
 import sys
 import math
+import time
+import json
 
 
 def main():
     iters = int(sys.argv[1]) if len(sys.argv) > 1 else 5_000_000
     rounds = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    start = time.perf_counter()
     acc = 0.0
     for _ in range(rounds):
         x = 0.123456789
@@ -23,7 +26,9 @@ def main():
             x = math.sqrt(abs(x) + 1.0)
             x += math.sin(x) * math.cos(x)
             acc += x
-    print(acc)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    # self-report (overhead-e2e 실험이 docker stdout에서 파싱); acc는 죽은코드 제거 방지용
+    print(json.dumps({"elapsed_ms": round(elapsed_ms, 2), "acc": acc}))
 
 
 if __name__ == "__main__":
