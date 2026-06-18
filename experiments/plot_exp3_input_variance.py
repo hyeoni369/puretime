@@ -86,7 +86,7 @@ def main():
         ax.set_xlabel("Input level", fontsize=10)
         ax.set_ylabel("Execution Time (ms)", fontsize=10)
         ax.tick_params(labelsize=9)
-        ax.legend(fontsize=8, framealpha=0.9)
+        ax.legend(fontsize=9.5, framealpha=0.9)
         ax.set_ylim(bottom=0)
         if victim == "float":
             ax.set_xscale("log")

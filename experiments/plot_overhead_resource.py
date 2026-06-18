@@ -85,7 +85,7 @@ def main():
     ax.axhline(0.15, color="#c62828", lw=1.2, ls="--", zorder=2)
     ax.text(0.05, 0.155, "0.15% of node", color="#c62828", fontsize=REF_FS, ha="left", va="bottom")
     ax.grid(axis="y", ls=":", alpha=0.4, zorder=0)
-    ax.legend(fontsize=7.5, framealpha=0.95, loc="upper right")
+    ax.legend(fontsize=11, framealpha=0.95, loc="upper right")
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
     p = os.path.join(args.out, f"fig4_overhead_resource.{args.format}")

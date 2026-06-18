@@ -199,12 +199,13 @@ def fig_accuracy_baseline(df_acc, output_dir, fmt="pdf"):
            color=COLORS["puretime"], edgecolor="black", linewidth=0.6,
            label="PureTime (Noise-Free)", zorder=3)
 
-    ax.set_xlabel("Noise Type")
-    ax.set_ylabel("Execution Time (ms)")
+    ax.set_xlabel("Noise Type", fontsize=12)
+    ax.set_ylabel("Execution Time (ms)", fontsize=12)
     ax.set_xticks(x)
-    ax.set_xticklabels(df_stats["type"])
-    ax.legend(framealpha=0.9, edgecolor="gray", loc="upper left", fontsize=7)
-    ax.set_ylim(0, df_stats["noisy_mean"].max() * 1.28)   # 위쪽 여백 ↑
+    ax.set_xticklabels(df_stats["type"], fontsize=11)
+    ax.tick_params(axis="y", labelsize=10)
+    ax.legend(framealpha=0.9, edgecolor="gray", loc="upper left", fontsize=10)
+    ax.set_ylim(0, 38000)   # y max 고정
 
     for i, row in df_stats.iterrows():
         # PureTime 막대 위에 efficiency 라벨. 키 큰 Noisy 막대와 안 겹치게 흰 배경 박스 + 진한 색.

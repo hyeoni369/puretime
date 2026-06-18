@@ -108,8 +108,8 @@ def main():
     axA.set_xlabel("Measured wait overlap (% of makespan)", fontsize=10)
     axA.set_ylabel("Efficiency  noise_free / solo", fontsize=10)
     axA.tick_params(labelsize=9)
-    axA.set_ylim(ymin, 2.05)   # 위 여백 확보 → legend(upper right)가 데이터 위에 떠 안 가림
-    axA.legend(fontsize=7.5, framealpha=0.95, loc="upper right")
+    axA.set_ylim(ymin, 2.6)   # 위 여백 확보 → legend(upper right)가 데이터 위에 떠 안 가림
+    axA.legend(fontsize=9.5, framealpha=0.95, loc="upper right")
     figA.tight_layout()
     pa = os.path.join(args.out, f"fig7a_interval_merge.{args.format}")
     figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
@@ -129,8 +129,12 @@ def main():
     axB.set_xlabel("Wait overlap (CPU-stress intensity ↑)", fontsize=10)
     axB.set_ylabel("Efficiency  noise_free / solo", fontsize=10)
     axB.tick_params(axis="y", labelsize=9)
-    axB.set_ylim(top=1.55)   # legend 공간(위)
-    axB.legend(fontsize=7.5, framealpha=0.95, loc="upper right", ncol=3)
+    axB.set_ylim(top=2.15)   # legend 공간(위, 2줄)
+    # 2줄(ncol=2) col-major 채움 순서 보정: 윗줄=solo·interval-merge, 아랫줄=naive
+    h, l = axB.get_legend_handles_labels()
+    o = [0, 2, 1]
+    axB.legend([h[i] for i in o], [l[i] for i in o], fontsize=9.5,
+               framealpha=0.95, loc="upper right", ncol=2)
     figB.tight_layout()
     pb = os.path.join(args.out, f"fig7b_interval_merge.{args.format}")
     figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")

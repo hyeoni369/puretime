@@ -96,7 +96,7 @@ def main():
     ax.set_xlabel("Contention level (per-resource strength sweep)", fontsize=11)
     ax.set_ylabel("Noise removed (%)", fontsize=11)
     ax.tick_params(axis="y", labelsize=10)
-    ax.legend(fontsize=7.5, framealpha=0.9, loc="lower left", ncol=1)
+    ax.legend(fontsize=9.5, framealpha=0.9, loc="lower left", ncol=1)
     ax.set_ylim(0, 110)
     ax.set_xlim(-0.4, 2.4)
     ax.grid(axis="y", ls=":", alpha=0.3)

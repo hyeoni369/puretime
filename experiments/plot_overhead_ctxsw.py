@@ -46,49 +46,51 @@ def main():
     means = np.array([L["mean"] for L in levels])
     cis = np.array([L["ci"] for L in levels])
 
-    fig, ax = plt.subplots(figsize=(4.0, 2.9))
+    fig, ax = plt.subplots(figsize=(5.6, 3.1))
 
-    ax.axhline(0, color="#999", lw=0.7, ls="-", zorder=0)
+    ax.axhline(0, color="#999", lw=0.8, ls="-", zorder=0)
     # 오버헤드 점 + 95% CI 에러바
     ax.errorbar(rates / 1000, means, yerr=cis, fmt="o-", color="#1565c0",
-                ms=5, lw=1.4, capsize=3, capthick=1, ecolor="#1565c0",
+                ms=6.5, lw=2.0, capsize=4, capthick=1.4, ecolor="#1565c0",
                 label="PureTime overhead (mean ± 95% CI)")
     # 선형 추세 (원점 통과 가까운 비례 관계 강조)
     if len(rates) >= 2:
         coef = np.polyfit(rates, means, 1)
         xs = np.linspace(0, rates.max() * 1.05, 50)
-        ax.plot(xs / 1000, np.polyval(coef, xs), "--", color="#90a4ae", lw=1.0,
+        ax.plot(xs / 1000, np.polyval(coef, xs), "--", color="#90a4ae", lw=1.4,
                 zorder=1, label=f"linear fit ({coef[0]*1e6:.2f}%/M-switch)")
 
-    # 각 점에 값 라벨
-    for L in levels:
-        ax.annotate(f"{L['mean']:+.1f}%", (L["rate"] / 1000, L["mean"]),
-                    textcoords="offset points", xytext=(6, 6), fontsize=6.5, color="#0d47a1")
+    # 메인엔 최댓값(끝점)만 라벨 — 중간 점은 곡선/추세선이, 저이벤트율은 inset이 설명하므로 깔끔하게
+    Lmax = levels[-1]
+    ax.annotate(f"{Lmax['mean']:+.1f}%", (Lmax["rate"] / 1000, Lmax["mean"]),
+                textcoords="offset points", xytext=(-6, 9), fontsize=11.5,
+                fontweight="bold", color="#0d47a1", ha="right")
 
-    ax.set_xlabel("Kernel-event rate (×1000 context-switches / sec)")
-    ax.set_ylabel("Time overhead (%)")
-    ax.legend(fontsize=6.5, framealpha=0.9, loc="upper left")
+    ax.set_xlabel("Kernel-event rate (×1000 context-switches / sec)", fontsize=12.5)
+    ax.set_ylabel("Time overhead (%)", fontsize=12.5)
+    ax.tick_params(labelsize=11)
+    ax.legend(fontsize=11.5, framealpha=0.9, loc="upper left")
     ax.set_ylim(bottom=min(-1, means.min() - 2))
 
     # 하단(<1.5%) 구간을 inset으로 확대 — 현실적 함수 이벤트율에서 오버헤드가 1.5% 미만임을 강조
     low = [L for L in levels if L["mean"] < 2.5]
     if len(low) >= 2:
-        axins = ax.inset_axes([0.50, 0.10, 0.46, 0.42])
+        axins = ax.inset_axes([0.52, 0.11, 0.46, 0.45])
         lr = np.array([L["rate"] for L in low]); lm = np.array([L["mean"] for L in low])
         lc = np.array([L["ci"] for L in low])
-        axins.axhline(0, color="#999", lw=0.6)
-        axins.axhline(1.5, color="#c62828", lw=1.0, ls="--")
-        axins.text(lr.min() / 1000, 1.5, " 1.5%", color="#c62828", fontsize=6, va="bottom")
-        axins.errorbar(lr / 1000, lm, yerr=lc, fmt="o-", color="#1565c0", ms=4, lw=1.2,
-                       capsize=2.5, ecolor="#1565c0")
+        axins.axhline(0, color="#999", lw=0.7)
+        axins.axhline(1.5, color="#c62828", lw=1.2, ls="--")
+        axins.text(lr.min() / 1000, 1.5, " 1.5%", color="#c62828", fontsize=9, va="bottom", fontweight="bold")
+        axins.errorbar(lr / 1000, lm, yerr=lc, fmt="o-", color="#1565c0", ms=5.5, lw=1.6,
+                       capsize=3, capthick=1.2, ecolor="#1565c0")
         for L in low:
             axins.annotate(f"{L['mean']:+.2f}%", (L["rate"] / 1000, L["mean"]),
-                           textcoords="offset points", xytext=(4, -9), fontsize=6, color="#0d47a1")
+                           textcoords="offset points", xytext=(5, -12), fontsize=9, color="#0d47a1")
         axins.set_xlim(0, max(lr) / 1000 * 1.15)
         axins.set_ylim(-0.6, 2.6)
-        axins.tick_params(labelsize=6)
-        axins.set_title("low event rates (realistic functions)", fontsize=6.2)
-        ax.indicate_inset_zoom(axins, edgecolor="#90a4ae", lw=0.8)
+        axins.tick_params(labelsize=9)
+        axins.set_title("low event rates (realistic functions)", fontsize=9.5)
+        ax.indicate_inset_zoom(axins, edgecolor="#90a4ae", lw=1.0)
 
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
