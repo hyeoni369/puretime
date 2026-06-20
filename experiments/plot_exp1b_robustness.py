@@ -93,7 +93,7 @@ def main():
                     xytext=(10, -3), fontsize=9, color="#b71c1c", fontweight="bold")
 
     ax.set_xticks([0, 1, 2]); ax.set_xticklabels(["low", "mid", "high"], fontsize=11)
-    ax.set_xlabel("Contention level (per-resource strength sweep)", fontsize=11)
+    ax.set_xlabel("Contention strength (per-resource)", fontsize=11)
     ax.set_ylabel("Noise removed (%)", fontsize=11)
     ax.tick_params(axis="y", labelsize=10)
     ax.legend(fontsize=9.5, framealpha=0.9, loc="lower left", ncol=1)
