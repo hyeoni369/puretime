@@ -110,6 +110,29 @@ def main():
     pa = os.path.join(args.out, f"baseline_cloudwatch.{args.format}")
     figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
 
+    # ---- baseline_cloudwatch_2band: Noisy-wall 기준 band vs PureTime 기준 band 폭 비교 ----
+    # CloudWatch가 어떤 신호로 ±2σ band를 학습하느냐에 따라 폭이 갈린다: noisy wall로 학습하면
+    # co-tenant 분산이 섞여 band가 넓어져(작은 회귀를 정상으로 흡수 → 놓침), PureTime(noise-free)로
+    # 학습하면 좁아 민감하다. 두 band를 함께 그려 폭 차이를 직접 보인다.
+    mu_e, sig_e = e2e.mean(), e2e.std(ddof=1)
+    lo_e, hi_e = mu_e - 2 * sig_e, mu_e + 2 * sig_e
+    figC, axC = plt.subplots(figsize=(4.6, 3.1))
+    axC.fill_between([x[0], x[-1]], [lo_e, lo_e], [hi_e, hi_e], color="#ef9a9a", alpha=0.40,
+                     label=f"band on Noisy wall (±2σ = {2*sig_e:.0f} ms)")
+    axC.fill_between([x[0], x[-1]], [lo, lo], [hi, hi], color="#64b5f6", alpha=0.6,
+                     label=f"band on PureTime (±2σ = {2*sig:.0f} ms)")
+    axC.plot(x, e2e, "-s", color="#c62828", ms=2.5, lw=1.0, label="Noisy wall")
+    axC.plot(x, pt, "-^", color="#1565c0", ms=2.5, lw=1.0, label="PureTime")
+    axC.set_xlabel("Invocation (random inputs)", fontsize=11); axC.set_ylabel("Exec time (ms)", fontsize=11)
+    axC.tick_params(labelsize=9)
+    axC.set_ylim(0, max(float(np.max(e2e)), hi_e) * 1.5)
+    axC.legend(fontsize=8, framealpha=0.95, loc="upper left", ncol=1)
+    figC.tight_layout()
+    pc = os.path.join(args.out, f"baseline_cloudwatch_2band.{args.format}")
+    figC.savefig(pc, dpi=200, bbox_inches="tight"); print(f"Saved: {pc}")
+    print(f"[A2] band width — Noisy ±2σ={2*sig_e:.0f}ms vs PureTime ±2σ={2*sig:.0f}ms "
+          f"({sig_e/sig:.1f}× wider on noisy)")
+
     # ---- fig6b: Knative KPA ----
     figB, axB = plt.subplots(figsize=(4.3, 3.0))
     axB.axhline(THRESH, color="#37474f", lw=1.0, ls="--", label=f"scale-out @ {THRESH:.0f}/pod")

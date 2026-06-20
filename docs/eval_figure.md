@@ -156,6 +156,7 @@
   - **E2E(빨강)가 band를 자주 넘음 = false alarm (노이즈로 오판)**
   - **Pure(파랑)는 band 안 + 정확**
   - band가 넓음(E2E 분산 커서) → 진짜 회귀 놓침; Pure 기준이면 band 좁아 빨리 잡음
+- **두-band 변형** (`baseline_cloudwatch_2band.pdf`): Noisy wall 기준 band(±2σ≈6.7s)와 PureTime 기준 band(±2σ≈2.3s)를 함께 음영으로 그려 폭을 직접 대비 — **noisy 기준이 3.0× 넓다**. 넓은 band가 작은 회귀를 정상범위로 흡수해 놓침을 한 장으로 보임(위 '핵심 메시지' 마지막 줄의 시각적 증거). 기존 `baseline_cloudwatch`(PureTime band 1개)는 유지.
 - **KPA autoscaling — 별도 처리** (한 figure 과밀 방지):
   - **옵션 A (추천)**: 별도 작은 panel/inset
     - y = 요청당 처리시간 → concurrency (Little's Law 환산)
@@ -215,7 +216,7 @@
 | 1b | `fig:eval-robustness` | line+점 | slowdown 배수 | removal% | C2 | 1단 | ✅ | `robustness.pdf` (CPU·Net line + Block 대표점) |
 | 2 | `fig:eval-merge` | line | 겹침비율 (Σwait−union)/Σwait | 정규화 | C3 | 1단 | ✅ | `interval_merge_scatter.pdf`·`interval_merge_bars.pdf` |
 | 3 | `fig:eval-input-dynamic` | 시계열 | 호출순서 1~30 | 절대 ms | C5 | 1단 | ✅ | `input_variance_float.pdf`·`input_variance_face.pdf` |
-| 4 | `fig:eval-baseline` | 시계열+band | 호출순서 1~30 | 절대 ms | C6·8·9 | 1단(+KPA분리) | ✅ | `baseline_cloudwatch.pdf`·`baseline_kpa.pdf` |
+| 4 | `fig:eval-baseline` | 시계열+band | 호출순서 1~30 | 절대 ms | C6·8·9 | 1단(+KPA분리) | ✅ | `baseline_cloudwatch.pdf`·`baseline_cloudwatch_2band.pdf`(두-band 폭비교)·`baseline_kpa.pdf` |
 | 5 | `fig:eval-overhead` | 막대(2-패널) | victim 3종 | % of node | C7 | 1단 | ✅ | `overhead_resource.pdf` (자원 메인) |
 | 5-보조 | — | 곡선 | switch/s | overhead% | C7 | 보조 | ✅ | `overhead_eventrate.pdf` (이벤트율) |
 | 5-보조2 | — | 곡선(median+IQR) | 노드 switch/s | overhead% | C7 | 보조 | ✅ 신규 | `overhead_nodeload.pdf` (노드부하 flat, drop=0) |
@@ -283,7 +284,7 @@
 | `overhead_nodeload` | `plot_overhead_nodeload.py` | `exp_overhead_nodeload.sh` | `overhead_nodeload/results.csv` | C7 (노드부하) |
 | `overhead_resource` | `plot_overhead_resource.py` | `exp_overhead_resource.sh` | `overhead/overhead_resource.csv` | C7 (자원·메인) |
 | `input_variance_float`/`input_variance_face` | `plot_exp3_input_variance.py` | `exp_input_variance.sh` | `input_variance/results.csv` | C5 |
-| `baseline_cloudwatch`/`baseline_kpa` | `plot_exp4_baseline.py` | (실험3 데이터 재사용, 별도 run 없음) | `input_variance/results.csv` | C6/C8/C9 |
+| `baseline_cloudwatch` / `baseline_cloudwatch_2band` / `baseline_kpa` | `plot_exp4_baseline.py` | (실험3 데이터 재사용, 별도 run 없음) | `input_variance/results.csv` | C6/C8/C9 |
 | `interval_merge_scatter`/`interval_merge_bars` | `plot_exp2_interval_merge.py` | `exp_mixed_noise.sh` | `mixed_noise/results.csv` | C3 (novelty) |
 | `overhead_e2e` | `plot_overhead_e2e.py` | `exp_overhead_e2e.sh` | `overhead_e2e/results.csv` | C7 (대안 시간) |
 
