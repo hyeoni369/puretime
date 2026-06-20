@@ -12,9 +12,10 @@ naive over-subtracts:
   noise_free_merged = makespan − |cpu ∪ net|        (correct)
   noise_free_naive  = makespan − (|cpu| + |net|)     (double-counts cpu ∩ net)
 
-As the overlap grows, `noise_free_naive` falls below the true solo time — and even below
-zero, which is physically impossible (a function cannot run faster than alone) — while the
-interval-merge estimate stays ≈ solo (efficiency ≈ 1). That gap is the whole point of C3.
+As the overlap grows, `noise_free_naive` first falls below the true solo time (already
+unphysical — a function can't beat its own solo run) and then even below zero (a *negative*
+execution time, outright impossible) — while the interval-merge estimate stays ≈ solo
+(efficiency ≈ 1). That gap is the whole point of C3.
 
 Panel A — efficiency (noise_free / solo) vs the measured overlap ratio: merged stays on
           the solo=1 line; naive dives into the shaded "impossible (<0)" region.
@@ -98,7 +99,7 @@ def main():
     figA, axA = plt.subplots(figsize=(4.4, 3.0))
     axA.axhspan(ymin, 0.0, color="#ffcdd2", alpha=0.5, zorder=0)
     axA.text((float(ov.min()) + float(ov.max())) / 2 * 100, ymin * 0.5,
-             "impossible: nf < 0\n(faster than running alone)", fontsize=7.5, color="#b71c1c",
+             "impossible: nf < 0\n(negative execution time)", fontsize=7.5, color="#b71c1c",
              ha="center", va="center", style="italic")
     axA.axhline(1.0, color="#37474f", lw=1.0, ls="--", label="solo (ideal = 1.0)")
     axA.scatter(ov * 100, na, s=16, color="#c62828", marker="s", label="naive (Σ waits)", zorder=3)
