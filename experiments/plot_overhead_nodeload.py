@@ -47,15 +47,11 @@ def main():
     lo = np.array([L["lo"] for L in levels])
     hi = np.array([L["hi"] for L in levels])
 
-    YTOP = 14.0
     fig, ax = plt.subplots(figsize=(5.6, 3.1))
     ax.axhline(0, color="#999", lw=0.7, zorder=0)
     base = med[0]
     ax.axhline(base, color="#90a4ae", lw=1.2, ls="--", zorder=1,
                label=f"victim-only baseline ({base:.1f}%)")
-    # 개별 측정점 (노이즈 투명하게)
-    for L, x in zip(levels, node):
-        ax.scatter([x] * len(L["ov"]), L["ov"], s=14, color="#bbdefb", zorder=2, edgecolors="none")
     # median + IQR
     ax.errorbar(node, med, yerr=[med - lo, hi - med], fmt="o-", color="#1565c0", ms=6.5, lw=1.9,
                 capsize=4, capthick=1.3, ecolor="#1565c0", zorder=4, label="median ± IQR")
@@ -65,16 +61,19 @@ def main():
             ax.scatter([x], [y], s=160, facecolors="none", edgecolors="#c62828", lw=2.0, zorder=5,
                        label=("drop > 0 (PureTime limit)" if not drew else None))
             drew = True
-    for L, x, y in zip(levels, node, med):
-        ax.annotate(f"{y:+.1f}%", (x, y), textcoords="offset points", xytext=(0, 13),
-                    fontsize=9.5, ha="center", color="#0d47a1", fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.9))
+    for i, (L, x, y) in enumerate(zip(levels, node, med)):
+        last = (i == len(levels) - 1)   # 마지막 점은 errorbar가 길어 라벨을 0 라인 바로 위로
+        if last:
+            ax.annotate(f"{y:+.1f}%", (x, -0.3), ha="center", va="bottom",
+                        fontsize=9.5, color="#0d47a1", fontweight="bold",
+                        bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.9))
+        else:
+            ax.annotate(f"{y:+.1f}%", (x, y), textcoords="offset points", xytext=(0, 18),
+                        va="bottom", fontsize=9.5, ha="center", color="#0d47a1", fontweight="bold",
+                        bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.9))
 
-    ax.set_ylim(-5, YTOP)
-    n_clip = int(sum(int((L["ov"] > YTOP).sum()) for L in levels))
-    if n_clip:
-        ax.text(0.98, 0.03, f"({n_clip} outlier > {YTOP:.0f}% clipped)", transform=ax.transAxes,
-                fontsize=7.5, ha="right", va="bottom", color="#888", style="italic")
+    ax.set_ylim(-8, 18)
+    ax.set_xlim(float(node.min()) - 40, float(node.max()) + 40)   # 좌우 살짝 넓게
     ax.set_xlabel("Node-wide event rate  (×1000 context-switches / sec)", fontsize=12)
     ax.set_ylabel("victim time overhead (%)", fontsize=12)
     ax.tick_params(labelsize=10.5)
