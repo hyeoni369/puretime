@@ -6,6 +6,8 @@ import time
 import json
 import shutil
 import zipfile
+import random
+import mmap
 
 
 def generate_input_files(data_dir: str, num_files: int, file_size_mb: int):
@@ -38,7 +40,43 @@ def compress_directory(input_dir: str, output_path: str) -> int:
     return os.path.getsize(archive_path)
 
 
+def raw_block_io():
+    """O_DIRECT random-write victim — block ~900ms에서 insert→issue 큐 적체를 살린다.
+
+    sequential store-zip은 block 레이어 merge로 request 개수가 적어, 짧으면(I/O량↓) insert→issue
+    큐잉이 소멸하고 경합이 device-internal(issue→complete, 측정 범위 밖)로 숨어 붕괴한다(파일럿 25%).
+    이 모드는 작은 random write를 많이 날려 *request 개수*를 신호로 만든다: filled HDD + queue_depth=2
+    에서 흩어진 sector를 때려 seek로 device 점유↑ → stressor 요청 뒤에서 victim의 issue가 지연 → wait
+    포착. O_DIRECT로 page cache 우회(매 write = 동기 insert, victim cgroup 귀속 결정적). fsync는 끝에
+    1회만(빈번 fsync = 드레인 배리어 → 적체 방해). 총 바이트(~48MB)는 작아 900ms에 끝나되 개수는 큼."""
+    bs = int(os.environ.get('BLOCK_BS', '32768'))            # 32KB (4096 정렬 배수)
+    io_ops = int(os.environ.get('IO_OPS', '1500'))            # write 횟수 = insert request 개수
+    work_dir = os.environ.get('WORK_DIR', '/tmp/compression_test')
+    os.makedirs(work_dir, exist_ok=True)
+    backing = os.path.join(work_dir, 'blockio_backing.bin')
+    backing_size = int(os.environ.get('BACKING_SIZE_MB', '1024')) * 1024 * 1024
+    if not os.path.exists(backing) or os.path.getsize(backing) < backing_size:
+        with open(backing, 'wb') as f:
+            f.truncate(backing_size)
+    n_blocks = backing_size // bs
+    buf = mmap.mmap(-1, bs)                                   # page-aligned 버퍼 (O_DIRECT 요구)
+    buf.write(os.urandom(bs)); buf.seek(0)
+    fd = os.open(backing, os.O_WRONLY | os.O_DIRECT)
+    start = time.perf_counter()
+    for _ in range(io_ops):
+        off = random.randint(0, n_blocks - 1) * bs           # random offset (bs 정렬)
+        os.pwrite(fd, buf, off)
+    os.fsync(fd)
+    os.close(fd)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    print(json.dumps({"elapsed_ms": round(elapsed_ms, 2), "io_ops": io_ops, "bs": bs,
+                      "total_elapsed_ms": round(elapsed_ms, 2)}))
+
+
 def main():
+    if os.environ.get('COMPRESS_METHOD') == 'raw_block':
+        raw_block_io()
+        return
     # Configuration
     num_files = int(os.environ.get('NUM_FILES', '5'))
     file_size_mb = int(os.environ.get('FILE_SIZE_MB', '10'))

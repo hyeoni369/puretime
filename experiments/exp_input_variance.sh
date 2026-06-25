@@ -12,8 +12,8 @@
 set -e
 
 # ===== Config =====
-FLOAT_ITERS=(${FLOAT_ITERS:-2000000 5000000 10000000 20000000 35000000 50000000})
-FACE_LEVELS=(${FACE_LEVELS:-0 1 5 10 15 30})
+FLOAT_ITERS=(${FLOAT_ITERS:-1000000 2000000 4000000 6000000 9000000 12000000})
+FACE_LEVELS=(${FACE_LEVELS:-1 5 10 15 30})
 CPU_STRESS_WORKERS="${CPU_STRESS_WORKERS:-3}"   # 고정 stress 강도 (register/L1 별도 cgroup)
 ITERATIONS="${ITERATIONS:-20}"
 VICTIMS="${VICTIMS:-float face}"                 # 둘 다 / 하나만 (float|face)
@@ -114,6 +114,10 @@ sweep_victim() {
     local victim="$1"; shift
     local levels=("$@")
     log_info "=== $victim input sweep (${levels[*]}) ==="
+    # warmup: 첫 컨테이너 cold start(docker 레이어/페이지캐시 로드)를 흡수해 버린다.
+    # 없으면 sweep 첫 input(opencv 무거운 face)이 startup 지배로 solo가 부풀려진다(input=1 2876ms artifact).
+    if [[ "$victim" == face ]];  then docker run --rm -e NUM_FACES=1 "$FACE_IMAGE" >/dev/null 2>&1 || true; fi
+    if [[ "$victim" == float ]]; then docker run --rm "$FLOAT_IMAGE" python function.py 1000000 1 >/dev/null 2>&1 || true; fi
     for input in "${levels[@]}"; do
         for iter in $(seq 1 $ITERATIONS); do
             run_one "$victim" "$input" solo "$iter";   sleep 3

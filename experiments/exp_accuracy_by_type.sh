@@ -449,7 +449,9 @@ run_block_io_experiment() {
     fi
 
     # victim: 실제 compression 함수 컨테이너 1개 (HDD 마운트)
-    start_containers "$COMPRESSION_IMAGE" 1 "-v $HDD_MOUNT:/tmp"
+    # BLOCK_VICTIM_ENV로 모드/파라미터 override 가능 (A: -e COMPRESS_METHOD=raw_block -e IO_OPS=...,
+    # B: -e COMPRESS_METHOD=stored -e FILE_SIZE_MB=...). 미설정 시 Dockerfile 기본(store 100MB).
+    start_containers "$COMPRESSION_IMAGE" 1 "-v $HDD_MOUNT:/tmp ${BLOCK_VICTIM_ENV:-}"
     save_cgroup_ids "$cgroup_file"
     wait_containers
 

@@ -11,7 +11,7 @@ COPY function.py .
 ADD https://raw.githubusercontent.com/opencv/opencv/4.x/samples/data/lena.jpg /app/face.jpg
 
 ENV NUM_FACES=5
-ENV SENTIMENT_ITERS=2500
+ENV SENTIMENT_ITERS=350
 # single-thread numpy/BLAS (design: single-threaded victim)
 ENV OMP_NUM_THREADS=1
 ENV OPENBLAS_NUM_THREADS=1

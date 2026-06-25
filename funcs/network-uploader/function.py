@@ -8,18 +8,10 @@ import boto3
 from botocore.client import Config
 
 
-def upload_to_minio(local_path: str, bucket: str, key: str,
-                    endpoint_url: str, access_key: str, secret_key: str) -> dict:
-    """Upload file to MinIO and return timing info"""
-    s3 = boto3.client(
-        's3',
-        endpoint_url=endpoint_url,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        config=Config(signature_version='s3v4'),
-        region_name='us-east-1'
-    )
-
+def upload_to_minio(s3, local_path: str, bucket: str, key: str) -> dict:
+    """Upload file to MinIO and return timing info. s3 client는 재사용(연결 floor 분산):
+    매 호출 새 client를 만들면 iteration마다 TCP connect/handshake floor가 반복돼 짧은 net
+    victim에서 그 비율이 커진다(removal↓). client 1회 생성 + N 전송이면 floor가 분산된다."""
     file_size = os.path.getsize(local_path)
 
     start = time.perf_counter()
@@ -51,15 +43,19 @@ def main():
         }))
         return
 
+    # client 1회 생성 (연결 floor 분산: iteration마다 재연결하지 않음)
+    s3 = boto3.client(
+        's3', endpoint_url=minio_endpoint,
+        aws_access_key_id=minio_access_key, aws_secret_access_key=minio_secret_key,
+        config=Config(signature_version='s3v4'), region_name='us-east-1',
+    )
+
     results = []
     total_start = time.perf_counter()
 
     for i in range(iterations):
         key = f"upload_{time.time_ns()}_{i}.bin"
-        upload_result = upload_to_minio(
-            input_file, bucket_name, key,
-            minio_endpoint, minio_access_key, minio_secret_key
-        )
+        upload_result = upload_to_minio(s3, input_file, bucket_name, key)
 
         results.append({
             'iteration': i + 1,
