@@ -295,9 +295,11 @@ SMALL_FILE_URL="https://github.com/STEllAR-GROUP/hpx/archive/refs/tags/1.4.0.zip
 
 # Create test file for network upload
 create_testfile_by_downloading() {
-    log_info "Downloading test file..."
-    curl -L -o "$TESTFILE_PATH" "$SMALL_FILE_URL"
-    log_pass "Test file created: $TESTFILE_PATH"
+    # net victim TX 크기 = 8MB (connect floor 비율↓ → removal 최대화; 작게 두면 PureTime 약화).
+    # SMALL_FILE_URL(hpx zip ~3MB) 대신 8MB urandom — upload TX는 압축 안 하므로 내용 무관.
+    log_info "Creating 8MB test file..."
+    dd if=/dev/urandom of="$TESTFILE_PATH" bs=1M count=8 status=none
+    log_pass "Test file created: $TESTFILE_PATH (8MB)"
 }
 
 ensure_testfile() {
