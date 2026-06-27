@@ -4,7 +4,8 @@ WORKDIR /app
 COPY function.py .
 
 # Create work directory with proper permissions
-RUN mkdir -p /tmp/compression_test
+RUN apt-get update && apt-get install -y --no-install-recommends fio \
+    && rm -rf /var/lib/apt/lists/* && mkdir -p /tmp/compression_test
 
 ENV NUM_FILES=1
 ENV FILE_SIZE_MB=100

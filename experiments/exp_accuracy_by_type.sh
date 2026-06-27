@@ -342,7 +342,7 @@ run_cpu_experiment() {
     fi
 
     # victim: 실제 float 함수 컨테이너 1개, 같은 코어에 핀
-    start_containers "$FLOAT_IMAGE" 1 "--cpuset-cpus=$CPU_PIN_CORE"
+    start_containers "${CPU_VICTIM_IMAGE:-$FLOAT_IMAGE}" 1 "--cpuset-cpus=$CPU_PIN_CORE"
     save_cgroup_ids "$cgroup_file"
     wait_containers
 
@@ -392,7 +392,7 @@ run_network_experiment() {
     fi
 
     # Start the victim: 실제 측정 대상 uploader 컨테이너 1개
-    start_containers "$NETWORK_UPLOADER_IMAGE" 1 "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
+    start_containers "${NET_VICTIM_IMAGE:-$NETWORK_UPLOADER_IMAGE}" 1 "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
     save_cgroup_ids "$cgroup_file"
 
     # Wait for the victim to finish
@@ -451,7 +451,7 @@ run_block_io_experiment() {
     # victim: 실제 compression 함수 컨테이너 1개 (HDD 마운트)
     # BLOCK_VICTIM_ENV로 모드/파라미터 override 가능 (A: -e COMPRESS_METHOD=raw_block -e IO_OPS=...,
     # B: -e COMPRESS_METHOD=stored -e FILE_SIZE_MB=...). 미설정 시 Dockerfile 기본(store 100MB).
-    start_containers "$COMPRESSION_IMAGE" 1 "-v $HDD_MOUNT:/tmp ${BLOCK_VICTIM_ENV:-}"
+    start_containers "${BLOCK_VICTIM_IMAGE:-$COMPRESSION_IMAGE}" 1 "-v $HDD_MOUNT:/tmp ${BLOCK_VICTIM_ENV:-}"
     save_cgroup_ids "$cgroup_file"
     wait_containers
 

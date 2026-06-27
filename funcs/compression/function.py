@@ -49,8 +49,9 @@ def raw_block_io():
     에서 흩어진 sector를 때려 seek로 device 점유↑ → stressor 요청 뒤에서 victim의 issue가 지연 → wait
     포착. O_DIRECT로 page cache 우회(매 write = 동기 insert, victim cgroup 귀속 결정적). fsync는 끝에
     1회만(빈번 fsync = 드레인 배리어 → 적체 방해). 총 바이트(~48MB)는 작아 900ms에 끝나되 개수는 큼."""
-    bs = int(os.environ.get('BLOCK_BS', '32768'))            # 32KB (4096 정렬 배수)
-    io_ops = int(os.environ.get('IO_OPS', '1500'))            # write 횟수 = insert request 개수
+    bs = os.environ.get('BLOCK_BS', '32768')                 # 32KB (4096 정렬)
+    qd = os.environ.get('AIO_DEPTH', '256')                  # iodepth = outstanding 요청 수(K)
+    runtime = os.environ.get('FIO_RUNTIME', '1')             # compute(I/O) 구간 길이(초)
     work_dir = os.environ.get('WORK_DIR', '/tmp/compression_test')
     os.makedirs(work_dir, exist_ok=True)
     backing = os.path.join(work_dir, 'blockio_backing.bin')
@@ -58,19 +59,26 @@ def raw_block_io():
     if not os.path.exists(backing) or os.path.getsize(backing) < backing_size:
         with open(backing, 'wb') as f:
             f.truncate(backing_size)
-    n_blocks = backing_size // bs
-    buf = mmap.mmap(-1, bs)                                   # page-aligned 버퍼 (O_DIRECT 요구)
-    buf.write(os.urandom(bs)); buf.seek(0)
-    fd = os.open(backing, os.O_WRONLY | os.O_DIRECT)
+    # fio(libaio)는 io_submit 배치라 GIL 없이 iodepth개를 진짜 동시 발행 → 짧은 --runtime 안에
+    # K=iodepth outstanding으로 insert 큐를 saturate(qd=2면 2개 issue, 나머지 insert 큐 대기).
+    # ThreadPool(GIL 병목, solo 8-10s)을 대체. --time_based --runtime으로 'cold start 제외 진짜
+    # I/O compute 구간'을 직접 제어. self-contention(같은 cgroup)은 charge 안 됨 → sound.
+    rate = os.environ.get('FIO_RATE', '')   # throughput 제한(예 12M) → victim을 약화시켜
+                                            # stressor 경합에 민감하게(removal↑). iodepth는 큐 saturate 유지.
+    import subprocess
+    fio_cmd = [
+        'fio', '--name=blkvictim', '--filename=' + backing, '--rw=randwrite',
+        '--bs=' + bs, '--iodepth=' + qd, '--numjobs=1',
+        '--runtime=' + runtime, '--time_based', '--direct=1',
+        '--ioengine=libaio', '--randrepeat=0', '--norandommap',
+    ]
+    if rate:
+        fio_cmd.append('--rate=' + rate)
     start = time.perf_counter()
-    for _ in range(io_ops):
-        off = random.randint(0, n_blocks - 1) * bs           # random offset (bs 정렬)
-        os.pwrite(fd, buf, off)
-    os.fsync(fd)
-    os.close(fd)
+    subprocess.run(fio_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elapsed_ms = (time.perf_counter() - start) * 1000
-    print(json.dumps({"elapsed_ms": round(elapsed_ms, 2), "io_ops": io_ops, "bs": bs,
-                      "total_elapsed_ms": round(elapsed_ms, 2)}))
+    print(json.dumps({"elapsed_ms": round(elapsed_ms, 2), "iodepth": qd,
+                      "runtime_s": runtime, "total_elapsed_ms": round(elapsed_ms, 2)}))
 
 
 def main():
