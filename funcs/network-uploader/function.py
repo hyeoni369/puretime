@@ -50,6 +50,18 @@ def main():
         config=Config(signature_version='s3v4'), region_name='us-east-1',
     )
 
+    # SeBS uploader 원본의 download 단계 복원 (원본=URL download→MinIO upload; 외부 URL을 MinIO 인프라로
+    # 대체). download(RX)는 PureTime 범위 밖이지만 connection을 활성화 → 이어지는 upload-TX 추적이 정확해짐
+    # (s3_download_upload가 같은 이유로 upload-only 88%→92%). dl_input.bin이 없으면 첫 호출이 seed.
+    try:
+        try:
+            s3.head_object(Bucket=bucket_name, Key='dl_input.bin')
+        except Exception:
+            s3.upload_file(input_file, bucket_name, 'dl_input.bin')
+        s3.download_file(bucket_name, 'dl_input.bin', '/tmp/dl_input.bin')
+    except Exception:
+        pass
+
     results = []
     total_start = time.perf_counter()
 
