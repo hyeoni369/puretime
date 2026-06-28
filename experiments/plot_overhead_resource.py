@@ -24,8 +24,13 @@ PCT = FuncFormatter(lambda x, _: f"{x:.2f}%")
 NODE_CORES = 24
 NODE_RAM_GB = 94
 RING_BUFFER_MB = 32
-VICTIMS = ["cpu", "network", "block_io"]
-XLAB = {"cpu": "CPU\n(float)", "network": "CPU\n(net)", "block_io": "CPU\n(block)"}
+VICTIMS = ["float_op", "factors", "sequential", "aes", "uploader", "s3", "compression"]
+XLAB = {
+    "float_op": "float_op\n(FunctionBench)", "factors": "factors\n(FaaSDom)",
+    "sequential": "sequential\n(ServerlessBench)", "aes": "aes\n(vSwarm)",
+    "uploader": "uploader\n(SeBS)", "s3": "s3-dl-ul\n(FunctionBench)",
+    "compression": "compression\n(SeBS)",
+}
 C_CPU = "#4e79a7"     # muted blue (Tableau)
 C_MEM = "#7b3f99"     # muted purple (ring buffer)
 C_MEM2 = "#c9aed6"    # light purple (base)
@@ -54,17 +59,17 @@ def main():
     args = ap.parse_args()
     d = load(args.data)
 
-    fig, ax = plt.subplots(figsize=(5.6, 3.4))
-    # CPU 3 victim (노드 코어 %)
+    fig, ax = plt.subplots(figsize=(13, 3.4))
+    # CPU 7 victim (노드 코어 %)
     cpu_node = [float(np.mean(d[v]["cpu_node"])) for v in VICTIMS]
-    xs_cpu = [0, 1, 2]
+    xs_cpu = list(range(len(VICTIMS)))
     ax.bar(xs_cpu, cpu_node, width=0.66, color=C_CPU, edgecolor="black", lw=0.6, zorder=3)
     for x, v in zip(xs_cpu, cpu_node):
         ax.annotate(f"{v:.3f}%", (x, v), textcoords="offset points", xytext=(0, 4),
                     ha="center", fontsize=BAR_FS, fontweight="bold", color="#2c4a6e")
 
     # Memory (노드 RAM %) — ring buffer 분해 stacked
-    x_mem = 3.6
+    x_mem = len(VICTIMS) + 0.6
     mem_node = float(np.mean([m for v in VICTIMS for m in d[v]["mem_node"]]))
     mem_mb = float(np.mean([m for v in VICTIMS for m in d[v]["mem_mb"]]))
     rb_node = mem_node * RING_BUFFER_MB / mem_mb
@@ -79,9 +84,9 @@ def main():
     ax.set_xticks(xs_cpu + [x_mem])
     ax.set_xticklabels([XLAB[v] for v in VICTIMS] + ["Memory\n(RSS)"], fontsize=TICK_FS)
     ax.set_ylabel("Footprint  (% of node)", fontsize=LBL_FS)
-    ax.set_ylim(0, 0.35); ax.set_xlim(-0.6, 4.3); ax.yaxis.set_major_formatter(PCT)
+    ax.set_ylim(0, 0.35); ax.set_xlim(-0.6, x_mem + 0.7); ax.yaxis.set_major_formatter(PCT)
     ax.tick_params(axis="y", labelsize=TICK_FS)
-    ax.axvline(2.8, color="#9e9e9e", ls=":", lw=1.0, zorder=1)   # CPU | Memory 구분
+    ax.axvline(len(VICTIMS) - 0.2, color="#9e9e9e", ls=":", lw=1.0, zorder=1)   # CPU | Memory 구분
     ax.axhline(0.15, color="#c62828", lw=1.2, ls="--", zorder=2)
     ax.text(0.05, 0.155, "0.15% of node", color="#c62828", fontsize=REF_FS, ha="left", va="bottom")
     ax.grid(axis="y", ls=":", alpha=0.4, zorder=0)

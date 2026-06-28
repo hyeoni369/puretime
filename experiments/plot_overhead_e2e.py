@@ -23,8 +23,13 @@ try:
 except ImportError:
     HAVE_SCIPY = False
 
-VLABEL = {"cpu": "CPU\n(float)", "block": "Block I/O\n(compression)", "net": "Network\n(uploader)"}
-ORDER = ["cpu", "block", "net"]
+VLABEL = {
+    "float_op": "float_op\n(FunctionBench)", "factors": "factors\n(FaaSDom)",
+    "sequential": "sequential\n(ServerlessBench)", "aes": "aes\n(vSwarm)",
+    "uploader": "uploader\n(SeBS)", "s3": "s3-dl-ul\n(FunctionBench)",
+    "compression": "compression\n(SeBS)",
+}
+ORDER = ["float_op", "factors", "sequential", "aes", "uploader", "s3", "compression"]
 
 
 def ci95(a):
@@ -57,7 +62,7 @@ def main():
     df["victim"] = df["victim"].astype(str).str.strip('"')
     vics = [v for v in ORDER if v in df["victim"].unique()]
 
-    fig, ax = plt.subplots(figsize=(5.4, 3.2))
+    fig, ax = plt.subplots(figsize=(13, 3.4))
     x = np.arange(len(vics))
     w = 0.34
     for i, v in enumerate(vics):

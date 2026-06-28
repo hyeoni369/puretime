@@ -92,9 +92,9 @@ check_prerequisites() {
 
     # Build Docker images if needed
     log_info "Building Docker images..."
-    docker build -t "$GRAPH_BFS_IMAGE" "$PURETIME_DIR/funcs/graph-bfs" > /dev/null 2>&1
-    docker build -t "$NETWORK_UPLOADER_IMAGE" "$PURETIME_DIR/funcs/network-uploader" > /dev/null 2>&1
-    docker build -t "$COMPRESSION_IMAGE" "$PURETIME_DIR/funcs/compression" > /dev/null 2>&1
+    for img in float factors sequential aes network-uploader s3-download-upload compression; do
+        docker build -t "$img" "$PURETIME_DIR/funcs/$img" > /dev/null 2>&1
+    done
     
     log_pass "Prerequisites OK"
 }
@@ -316,6 +316,25 @@ ensure_testfile() {
 # Experiment Functions
 # =============================================================================
 
+run_victim_resource() {
+    # accuracy 7 victim 공통: victim 도는 동안 PureTime loader의 CPU%/RSS 측정 (solo).
+    local victim="$1" image="$2" opts="$3" count="$4" iteration="$5"
+    log_info "$victim resource: $count container(s), iteration $iteration"
+
+    $PURETIME_BIN -v -t $TRACE_DURATION &
+    local puretime_pid=$!
+    sleep 2
+
+    start_resource_monitor "$victim" "$count" "$iteration"
+    start_containers "$image" "$count" "$opts"
+    wait_containers
+    stop_resource_monitor
+
+    kill $puretime_pid 2>/dev/null || true
+    wait $puretime_pid 2>/dev/null || true
+    stop_containers
+}
+
 run_cpu_experiment() {
     local count="$1"
     local iteration="$2"
@@ -432,35 +451,26 @@ main() {
     log_info "Starting PureTime Resource Usage Experiments"
     log_info "============================================="
 
-    # CPU Experiments
+    ensure_testfile   # net victim(uploader) 로컬 입력
     log_info ""
-    log_info "=== CPU Contention Experiments ==="
-    for count in "${CPU_CONTAINER_COUNTS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
-            run_cpu_experiment "$count" "$iter"
-        done
+    log_info "=== 7 victim resource (PureTime loader CPU%/RSS, solo) ==="
+    local VICTIMS=(
+      "float_op|float|--cpuset-cpus=0"
+      "factors|factors|--cpuset-cpus=0"
+      "sequential|sequential|--cpuset-cpus=0"
+      "aes|aes|--cpuset-cpus=0"
+      "uploader|network-uploader|--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
+      "s3|s3-download-upload|--network=host"
+      "compression|compression|-v $HDD_MOUNT:/tmp"
+    )
+    for vspec in "${VICTIMS[@]}"; do
+      IFS='|' read -r victim image opts <<< "$vspec"
+      log_info "=== $victim ==="
+      for iter in $(seq 1 $ITERATIONS); do
+        run_victim_resource "$victim" "$image" "$opts" 1 "$iter"
+      done
+      sleep 2
     done
-    sleep 2
-
-    # Network Experiments
-    log_info ""
-    log_info "=== Network Contention Experiments ==="
-    for count in "${NET_CONTAINER_COUNTS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
-            run_network_experiment "$count" "$iter"
-        done
-    done
-    sleep 2
-
-    # Block I/O Experiments
-    log_info ""
-    log_info "=== Block I/O Contention Experiments ==="
-    for count in "${BIO_CONTAINER_COUNTS[@]}"; do
-        for iter in $(seq 1 $ITERATIONS); do
-            run_block_io_experiment "$count" "$iter"
-        done
-    done
-    sleep 2
 
     log_info ""
     log_info "============================================="

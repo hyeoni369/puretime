@@ -16,7 +16,7 @@ ITERATIONS="${ITERATIONS:-30}"
 CPU_CORE="${CPU_CORE:-2}"           # CPU victim 핀 코어 (코어0=drain용 비움)
 TESTFILE="${TESTFILE:-/data/tmp.bin}"
 HDD_MOUNT="${HDD_MOUNT:-/mnt/hdd/tmp}"
-VICTIMS_SEL="${VICTIMS_SEL:-cpu block net}"   # 부분 실행용
+VICTIMS_SEL="${VICTIMS_SEL:-float_op factors sequential aes uploader s3 compression}"   # accuracy 7 victim (부분 실행용)
 
 mkdir -p "$OUTPUT_DIR" 2>/dev/null || { echo "출력 디렉토리 생성 실패: $OUTPUT_DIR"; exit 1; }
 RESULTS="$OUTPUT_DIR/results.csv"
@@ -33,7 +33,7 @@ restore() {
 }
 trap restore EXIT INT TERM
 
-for img in float network-uploader compression; do
+for img in float factors sequential aes network-uploader s3-download-upload compression; do
     DOCKER_BUILDKIT=0 docker build -t "$img" "$PURETIME_DIR/funcs/$img" >/dev/null 2>&1 \
         || { echo "victim 빌드 실패: $img"; exit 1; }
 done
@@ -46,9 +46,13 @@ CORE=os.environ["CPU_CORE"]; TF=os.environ["TESTFILE"]; HDD=os.environ["HDD_MOUN
 SEL=set(os.environ["VICTIMS_SEL"].split())
 TRACEDIR="/var/log/puretime"
 ALL=[
-  ("cpu",  "float",            ["--cpuset-cpus=%s" % CORE],                 "elapsed_ms"),
-  ("block","compression",      ["-v", "%s:/tmp" % HDD],                     "total_elapsed_ms"),
-  ("net",  "network-uploader", ["--network=host", "-v", "%s:%s:ro" % (TF, TF)], "elapsed_ms"),
+  ("float_op",    "float",              ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
+  ("factors",     "factors",            ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
+  ("sequential",  "sequential",         ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
+  ("aes",         "aes",                ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
+  ("uploader",    "network-uploader",   ["--network=host", "-v", "%s:%s:ro" % (TF, TF)], "elapsed_ms"),
+  ("s3",          "s3-download-upload", ["--network=host"], "elapsed_ms"),
+  ("compression", "compression",        ["-v", "%s:/tmp" % HDD], "total_elapsed_ms"),
 ]
 VICTIMS=[v for v in ALL if v[0] in SEL]
 
