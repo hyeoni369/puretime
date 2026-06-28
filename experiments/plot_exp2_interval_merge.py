@@ -138,7 +138,8 @@ def main():
                framealpha=0.95, loc="upper right", ncol=2)
     figB.tight_layout()
     pb = os.path.join(args.out, f"interval_merge_bars.{args.format}")
-    figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")
+    # [disabled] interval_merge_bars — sigconf는 interval_merge_scatter만 사용
+    # figB.savefig(pb, dpi=200, bbox_inches="tight"); print(f"Saved: {pb}")
     print(f"{'overlap%':>8} {'infl×':>6} {'merged/solo':>12} {'naive/solo':>11} {'n':>3}")
     for L in levels:
         print(f"{np.median(L['overlap'])*100:8.0f} {L['infl']:6.1f} "

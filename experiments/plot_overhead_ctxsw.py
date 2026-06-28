@@ -95,8 +95,9 @@ def main():
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"overhead_eventrate.{args.format}")
-    fig.savefig(path, dpi=200, bbox_inches="tight")
-    print(f"Saved: {path}")
+    # [disabled] overhead_eventrate — sigconf 미참조(design fig3였으나 논문에서 제외)
+    # fig.savefig(path, dpi=200, bbox_inches="tight")
+    # print(f"Saved: {path}")
     print(f"{'switch/s':>10} {'overhead':>10} {'95%CI':>14} {'n':>3}")
     for L in levels:
         print(f"{L['rate']:>10.0f} {L['mean']:+9.2f}% [{L['mean']-L['ci']:+.2f},{L['mean']+L['ci']:+.2f}] {L['n']:>3}")

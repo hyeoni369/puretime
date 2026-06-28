@@ -590,9 +590,11 @@ def main():
     generated = []
 
     if df_acc is not None:
-        f1 = fig_accuracy_baseline(df_acc, output_dir, fmt)
-        f2 = fig_noise_source_identification(df_acc, output_dir, fmt)
-        generated.extend([f for f in [f1, f2] if f])
+        # [disabled] accuracy_baseline(subplot) → accuracy_normalized(plot_accuracy_normalized.py)로 대체
+        # [disabled] noise_source_id → sigconf 미참조
+        # f1 = fig_accuracy_baseline(df_acc, output_dir, fmt)
+        # f2 = fig_noise_source_identification(df_acc, output_dir, fmt)
+        pass
 
     # fig3 (time overhead) is DEPRECATED here: the graph-bfs w/vs w/o box-plot produced
     # negative overhead (signal < measurement noise). fig3 is now the event-rate vs overhead

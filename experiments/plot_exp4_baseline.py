@@ -108,7 +108,8 @@ def main():
     axA.legend(fontsize=9.5, framealpha=0.95, loc="upper left")
     figA.tight_layout()
     pa = os.path.join(args.out, f"baseline_cloudwatch.{args.format}")
-    figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
+    # [disabled] baseline_cloudwatch 단독 — sigconf는 baseline_cloudwatch_2band / baseline_kpa만 사용
+    # figA.savefig(pa, dpi=200, bbox_inches="tight"); print(f"Saved: {pa}")
 
     # ---- baseline_cloudwatch_2band: Noisy-wall 기준 band vs PureTime 기준 band 폭 비교 ----
     # CloudWatch가 어떤 신호로 ±2σ band를 학습하느냐에 따라 폭이 갈린다: noisy wall로 학습하면
