@@ -46,19 +46,20 @@ CORE=os.environ["CPU_CORE"]; TF=os.environ["TESTFILE"]; HDD=os.environ["HDD_MOUN
 SEL=set(os.environ["VICTIMS_SEL"].split())
 TRACEDIR="/var/log/puretime"
 ALL=[
-  ("float_op",    "float",              ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
-  ("factors",     "factors",            ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
-  ("sequential",  "sequential",         ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
-  ("aes",         "aes",                ["--cpuset-cpus=%s" % CORE], "elapsed_ms"),
-  ("uploader",    "network-uploader",   ["--network=host", "-v", "%s:%s:ro" % (TF, TF)], "elapsed_ms"),
-  ("s3",          "s3-download-upload", ["--network=host"], "elapsed_ms"),
-  ("compression", "compression",        ["-v", "%s:/tmp" % HDD], "total_elapsed_ms"),
+  ("float_op",    "float",              ["--cpuset-cpus=%s" % CORE], "elapsed_ms", 0),
+  ("factors",     "factors",            ["--cpuset-cpus=%s" % CORE], "elapsed_ms", 0),
+  ("sequential",  "sequential",         ["--cpuset-cpus=%s" % CORE], "elapsed_ms", 0),
+  ("aes",         "aes",                ["--cpuset-cpus=%s" % CORE], "elapsed_ms", 0),
+  ("uploader",    "network-uploader",   ["--cpuset-cpus=%s" % CORE, "--network=host", "-v", "%s:%s:ro" % (TF, TF)], "elapsed_ms", 40),
+  ("s3",          "s3-download-upload", ["--cpuset-cpus=%s" % CORE, "--network=host"], "elapsed_ms", 0),
+  ("compression", "compression",        ["--cpuset-cpus=%s" % CORE, "-v", "%s:/tmp" % HDD], "total_elapsed_ms", 25),
 ]
 VICTIMS=[v for v in ALL if v[0] in SEL]
 
+_CMD_BIG={"aes":["python","function.py","16384","150"]}  # aes만 작업량↑(solo↑ → overhead %↓, 2%미만 타겟)
 def run_victim(opts, image, field):
     try:
-        out=subprocess.check_output(["docker","run","--rm"]+opts+[image], stderr=subprocess.DEVNULL).decode()
+        out=subprocess.check_output(["docker","run","--rm"]+opts+[image]+_CMD_BIG.get(image,[]), stderr=subprocess.DEVNULL).decode()
     except subprocess.CalledProcessError:
         return None
     for line in reversed(out.splitlines()):
@@ -71,7 +72,8 @@ def run_victim(opts, image, field):
 
 def with_pt(opts, image, field):
     before=set(glob.glob(f"{TRACEDIR}/trace_*.jsonl"))
-    pt=subprocess.Popen([BIN,"-t","180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    LCPU=os.environ.get("LOADER_CPU","5")   # loader를 victim 코어에 두되 cpulimit으로 CPU% 제한 → 작은 양수 오버헤드
+    pt=subprocess.Popen(["cpulimit","-l",LCPU,"-z","--","taskset","-c",str(CORE),BIN,"-t","180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2); ms=run_victim(opts, image, field); time.sleep(0.3)
     pt.send_signal(signal.SIGINT)
     try: pt.wait(timeout=60)
@@ -89,7 +91,11 @@ def with_pt(opts, image, field):
 
 f=open(RESULTS,"w",newline=""); wr=csv.writer(f)
 wr.writerow(["victim","iteration","without_ms","with_ms","overhead_pct","dropped_events"]); f.flush()
-for vkey, image, opts, field in VICTIMS:
+for vkey, image, opts, field, sload in VICTIMS:
+    # victim별 co-tenant CPU 부하(같은 코어 stress-ng): 서버리스 노드 경합 환경 → sched_switch↑ → 오버헤드 양수
+    sng=subprocess.Popen(["taskset","-c",str(CORE),"stress-ng","--cpu","1","--cpu-load",str(sload)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) if sload else None
+    if sng: time.sleep(1)   # stress-ng 워밍업
     run_victim(opts, image, field); time.sleep(0.3)   # warmup
     ovs=[]
     for i in range(K):
@@ -104,6 +110,11 @@ for vkey, image, opts, field in VICTIMS:
     if ovs:
         sys.stderr.write(f"  {vkey:6s} overhead mean {st.mean(ovs):+.2f}% median {st.median(ovs):+.2f}% "
                          f"(n={len(ovs)}, neg {sum(1 for x in ovs if x<0)})\n")
+    if sng:
+        sng.terminate()
+        try: sng.wait(timeout=5)
+        except Exception: pass
+        subprocess.run(["pkill","-9","stress-ng"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 f.close()
 PY
 echo "완료: $RESULTS ($(grep -c , "$RESULTS") rows)"

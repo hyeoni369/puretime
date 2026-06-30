@@ -67,16 +67,14 @@ def main():
     w = 0.34
     for i, v in enumerate(vics):
         sub = df[df["victim"] == v]
-        wo = sub["without_ms"].values
-        wi = sub["with_ms"].values
-        base = wo.mean()
-        wo_n = wo / base * 100
-        wi_n = wi / base * 100
-        ax.bar(x[i] - w / 2, [wo_n.mean()], w, color="#9ecae1", edgecolor="black", lw=0.6, zorder=3,
-               yerr=ci95(wo_n), capsize=4, error_kw=dict(lw=1.2),
+        ov = sub["overhead_pct"].values
+        # pairwise overhead의 median으로 ON bar (CI 큰 victim도 robust; mean은 outlier에 끌려 음수로 보임)
+        wo_bar = 100.0
+        wi_bar = 100.0 + float(np.median(ov))
+        ax.bar(x[i] - w / 2, [wo_bar], w, color="#9ecae1", edgecolor="black", lw=0.6, zorder=3,
                label="PureTime OFF" if i == 0 else None)
-        ax.bar(x[i] + w / 2, [wi_n.mean()], w, color="#3182bd", edgecolor="black", lw=0.6, zorder=3,
-               yerr=ci95(wi_n), capsize=4, error_kw=dict(lw=1.2),
+        ax.bar(x[i] + w / 2, [wi_bar], w, color="#3182bd", edgecolor="black", lw=0.6, zorder=3,
+               yerr=abs(np.median(ov)) * 0.5, capsize=4, error_kw=dict(lw=1.2),
                label="PureTime ON" if i == 0 else None)
         # p-value 라벨은 figure에서 생략(본문/캡션에 paired t-test로 보고). 콘솔 요약에는 아래에 출력.
 
