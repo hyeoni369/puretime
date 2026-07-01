@@ -34,15 +34,18 @@ def stats(path, rt, cc):
     r = df[df.resource_type == rt]
     bl = r[r.container_count == 0]
     noisy = r[r.container_count == cc]
-    se = bl.t_e2e_ms.median()
-    ce = noisy.t_e2e_ms.median()
-    cp = noisy.t_puretime_ms.median()
     sbi = bl.groupby('iteration').t_e2e_ms.median()
+    # pairwise: 각 noisy를 *같은 iteration*의 solo로 정규화 → HDD drift 보정.
+    # (block은 solo가 iteration마다 1972~3305ms로 흔들려 aggregate median/median이 왜곡됨.
+    #  CPU/Net은 drift가 작아 aggregate와 거의 동일.) bar·removal 모두 pairwise로 일관.
+    ns = [x.t_e2e_ms / sbi.loc[x.iteration] for _, x in noisy.iterrows() if x.iteration in sbi.index]
+    ps = [x.t_puretime_ms / sbi.loc[x.iteration] for _, x in noisy.iterrows() if x.iteration in sbi.index]
     pp = [(x.t_e2e_ms - x.t_puretime_ms) / (x.t_e2e_ms - sbi.loc[x.iteration]) * 100
           for _, x in noisy.iterrows()
           if x.iteration in sbi.index and x.t_e2e_ms > sbi.loc[x.iteration]]
-    eff = np.median(pp) if pp else float('nan')
-    return ce / se, cp / se, eff
+    return (np.median(ns) if ns else float('nan'),
+            np.median(ps) if ps else float('nan'),
+            np.median(pp) if pp else float('nan'))
 
 
 def main():
