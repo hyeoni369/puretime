@@ -84,11 +84,9 @@ def main():
     ax.set_xticks(xs_cpu + [x_mem])
     ax.set_xticklabels([XLAB[v] for v in VICTIMS] + ["Memory\n(RSS)"], fontsize=TICK_FS)
     ax.set_ylabel("Footprint  (% of node)", fontsize=LBL_FS)
-    ax.set_ylim(0, 0.35); ax.set_xlim(-0.6, x_mem + 0.7); ax.yaxis.set_major_formatter(PCT)
+    ax.set_ylim(0, 0.30); ax.set_xlim(-0.6, x_mem + 0.7); ax.yaxis.set_major_formatter(PCT)
     ax.tick_params(axis="y", labelsize=TICK_FS)
     ax.axvline(len(VICTIMS) - 0.2, color="#9e9e9e", ls=":", lw=1.0, zorder=1)   # CPU | Memory 구분
-    ax.axhline(0.15, color="#c62828", lw=1.2, ls="--", zorder=2)
-    ax.text(0.05, 0.155, "0.15% of node", color="#c62828", fontsize=REF_FS, ha="left", va="bottom")
     ax.grid(axis="y", ls=":", alpha=0.4, zorder=0)
     ax.legend(fontsize=11, framealpha=0.95, loc="upper right")
     fig.tight_layout()

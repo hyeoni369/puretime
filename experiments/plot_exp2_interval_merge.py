@@ -89,7 +89,7 @@ def main():
     na = np.concatenate([L["naive_eff"] for L in levels])
     order = np.argsort(ov)
     ov, me, na = ov[order], me[order], na[order]
-    ymin = min(-0.1, float(na.min()) - 0.1)
+    ymin = min(-1.75, float(na.min()) - 0.1)
     lv_ov = [np.median(L["overlap"]) * 100 for L in levels]
     lv_me = [np.median(L["merged_eff"]) for L in levels]
     lv_na = [np.median(L["naive_eff"]) for L in levels]
@@ -109,7 +109,7 @@ def main():
     axA.set_xlabel("Measured wait overlap (% of makespan)", fontsize=10)
     axA.set_ylabel("Efficiency  noise_free / solo", fontsize=10)
     axA.tick_params(labelsize=9)
-    axA.set_ylim(ymin, 2.6)   # 위 여백 확보 → legend(upper right)가 데이터 위에 떠 안 가림
+    axA.set_ylim(ymin, 2.75)   # 위 여백 확보 → legend(upper right)가 데이터 위에 떠 안 가림
     axA.legend(fontsize=9.5, framealpha=0.95, loc="upper right")
     figA.tight_layout()
     pa = os.path.join(args.out, f"interval_merge_scatter.{args.format}")
