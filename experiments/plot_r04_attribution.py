@@ -94,7 +94,7 @@ def main():
         wl, na, pt = noisy_stats(base, rt, cc)
         labels.append(lab); wls.append(wl); nas.append(na); pts.append(pt)
 
-    x = np.arange(len(labels)); w = 0.2
+    x = np.arange(len(labels)); w = 0.23
     figA, axA = plt.subplots(figsize=(17, 3.5))
     ymax = max(wls) * 1.15
     axA.axhspan(0, 1.0, color='#fce4e4', alpha=0.55, zorder=0)
@@ -104,9 +104,11 @@ def main():
     axA.bar(x + 0.5 * w, nas, w, label='All-wait subtracted', color=c_all, edgecolor='white', lw=0.5, zorder=3)
     axA.bar(x + 1.5 * w, pts, w, label='PureTime', color=c_pt, edgecolor='white', lw=0.5, zorder=3)
     for i in range(len(labels)):
-        axA.annotate(f'{nas[i]:.2f}×', (x[i] + 0.5 * w, nas[i]), xytext=(0, 3), textcoords='offset points',
+        # tie(값 같음)면 라벨을 좌우로 살짝 벌려 겹침 방지
+        dodge = 4 if abs(nas[i] - pts[i]) < 0.05 else 0
+        axA.annotate(f'{nas[i]:.2f}×', (x[i] + 0.5 * w, nas[i]), xytext=(-dodge, 3), textcoords='offset points',
                      ha='center', fontsize=10.5, color='#b06a00', fontweight='bold')
-        axA.annotate(f'{pts[i]:.2f}×', (x[i] + 1.5 * w, pts[i]), xytext=(0, 3), textcoords='offset points',
+        axA.annotate(f'{pts[i]:.2f}×', (x[i] + 1.5 * w, pts[i]), xytext=(dodge, 3), textcoords='offset points',
                      ha='center', fontsize=10.5, color='#245a7d', fontweight='bold')
     axA.axhline(1, ls='--', color='#555', lw=1.3, alpha=0.8, zorder=2)
     axA.set_xticks(x); axA.set_xticklabels(labels, fontsize=12.5)
