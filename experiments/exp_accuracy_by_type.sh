@@ -37,7 +37,7 @@ NET_STRESS_FLOWS=(${NET_FLOWS_SWEEP:-0 4})
 ITERATIONS="${ITERATIONS:-50}"
 
 # PureTime 트레이싱 시간 (컨테이너 실행 완료까지 충분한 시간)
-TRACE_DURATION=180
+TRACE_DURATION="${TRACE_DURATION:-180}"
 
 # =============================================================================
 # Path Configuration
@@ -50,6 +50,7 @@ MAKESPAN="$SCRIPT_DIR/noise_free_makespan.py"
 
 OUTPUT_DIR="${1:-/tmp/puretime_exp_type_$(date +%Y%m%d_%H%M%S)}"
 RESULTS_FILE="$OUTPUT_DIR/results.csv"
+RESULTS_NOATTR_FILE="$OUTPUT_DIR/results_noattr.csv"   # R-04: attribution off(self+other 전체 대기 차감) 결과
 
 # Docker image names
 FLOAT_IMAGE="float"                 # CPU victim/stressor = register/L1-bound (설계 요구; graph-bfs 대체)
@@ -61,7 +62,7 @@ COMPRESSION_IMAGE="compression"
 CPU_PIN_CORE=2
 
 # Network/Block I/O 설정
-TESTFILE_PATH="/data/tmp.bin"
+TESTFILE_PATH="${TESTFILE_PATH:-/data/tmp.bin}"
 MINIO_IP="165.194.27.225"
 MINIO_ENDPOINT="http://$MINIO_IP:9000"
 HDD_MOUNT="/mnt/hdd/tmp"
@@ -121,6 +122,7 @@ setup_output() {
     else
         log_info "기존 결과에 append: $RESULTS_FILE ($(($(wc -l < "$RESULTS_FILE") - 1)) rows)"
     fi
+    [ -f "$RESULTS_NOATTR_FILE" ] || echo "cgroup_id,resource_type,container_count,iteration,t_e2e_ms,t_puretime_ms,t_noise_cpu,t_noise_net,t_noise_bio" > "$RESULTS_NOATTR_FILE"
     log_info "Output directory: $OUTPUT_DIR"
 }
 
@@ -130,6 +132,7 @@ save_puretime_results() {
     local resource_type="$2"
     local count="$3"
     local iteration="$4"
+    local outfile="${5:-$RESULTS_FILE}"
 
     echo "$json_result" | jq -r --arg type "$resource_type" --arg cnt "$count" --arg iter "$iteration" '
         .[] | [
@@ -143,7 +146,7 @@ save_puretime_results() {
             (.wait_net / 1000000),
             (.wait_bio / 1000000)
         ] | @csv
-    ' >> "$RESULTS_FILE"
+    ' >> "$outfile"
 }
 
 get_latest_trace() {
@@ -289,7 +292,7 @@ restore_io_scheduler() {
 # =============================================================================
 
 # Test file for network upload
-TESTFILE_PATH="/data/tmp.bin"
+TESTFILE_PATH="${TESTFILE_PATH:-/data/tmp.bin}"
 SMALL_FILE_URL="https://github.com/STEllAR-GROUP/hpx/archive/refs/tags/1.4.0.zip"
 # LARGE_FILE_URL="https://download.pytorch.org/models/resnet50-19c8e357.pth"
 
@@ -355,6 +358,9 @@ run_cpu_experiment() {
 
     local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
     save_puretime_results "$puretime_result" "cpu" "$workers" "$iteration"
+    local puretime_noattr=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" --no-attribution)
+    save_puretime_results "$puretime_noattr" "cpu" "$workers" "$iteration" "$RESULTS_NOATTR_FILE"
+    cp "$trace_file" "$OUTPUT_DIR/trace_cpu_${workers}_${iteration}.jsonl" 2>/dev/null || true
 
     stop_containers
     for w in $(seq 1 "$workers"); do rmdir "${stress_cg}_$w" 2>/dev/null || true; done
@@ -388,13 +394,27 @@ run_network_experiment() {
     local stress_pid=""
     if [ "$flows" -gt 0 ]; then
         mkdir -p "$stress_cg"
-        bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec iperf3 -c $MINIO_IP -P $flows -t $TRACE_DURATION" > /dev/null 2>&1 &
+        if [ "${NET_NOISE:-}" = "cpu" ]; then
+            # co-tenant CPU 경합 (victim 코어에 stress-ng $flows workers): R-04 ablation용.
+            # foreign net 패킷이 0이므로 net 대기는 전부 self → attribution은 CPU 노이즈만 정확히
+            # 빼고 자기 NIC 백로그는 남긴다; no-attr은 백로그까지 빼서 solo 아래로 떨어진다.
+            bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec stress-ng --cpu $flows --cpu-method float --taskset $CPU_PIN_CORE --cpu-load 100 -t $TRACE_DURATION" > /dev/null 2>&1 &
+        elif [ -n "${NET_BURSTY:-}" ]; then
+            # bursty co-tenant 트래픽 (1s on / 1s off): 서버리스 co-tenant는 짧은 invocation burst.
+            # R-04 ablation용 — burst 사이 무경합 구간에 victim 자신의 패킷 백로그(self-wait)가 드러난다.
+            bash -c "echo \$\$ > $stress_cg/cgroup.procs; end=\$((SECONDS+$TRACE_DURATION)); while [ \$SECONDS -lt \$end ]; do iperf3 -c $MINIO_IP -P $flows -t 1 >/dev/null 2>&1; sleep 1; done" > /dev/null 2>&1 &
+        else
+            bash -c "echo \$\$ > $stress_cg/cgroup.procs; exec iperf3 -c $MINIO_IP -P $flows -t $TRACE_DURATION" > /dev/null 2>&1 &
+        fi
         stress_pid=$!
         sleep 2   # 노이즈가 먼저 램프업한 뒤 victim 시작
     fi
 
-    # Start the victim: 실제 측정 대상 uploader 컨테이너 1개
-    start_containers "${NET_VICTIM_IMAGE:-$NETWORK_UPLOADER_IMAGE}" 1 "--network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro"
+    # Start the victim: 실제 측정 대상 uploader 컨테이너 1개 (INPUT_FILE로 payload 경로 전달)
+    # NET_NOISE=cpu면 victim을 stressor와 같은 코어에 핀 (CPU 경합이 물리게)
+    local net_pin=""
+    [ "${NET_NOISE:-}" = "cpu" ] && net_pin="--cpuset-cpus=$CPU_PIN_CORE"
+    start_containers "${NET_VICTIM_IMAGE:-$NETWORK_UPLOADER_IMAGE}" 1 "$net_pin --network=host -v $TESTFILE_PATH:$TESTFILE_PATH:ro -e INPUT_FILE=$TESTFILE_PATH"
     save_cgroup_ids "$cgroup_file"
 
     # Wait for the victim to finish
@@ -404,6 +424,7 @@ run_network_experiment() {
     if [ -n "$stress_pid" ]; then
         kill "$stress_pid" 2>/dev/null || true
         pkill -9 -f "iperf3 -c $MINIO_IP" 2>/dev/null || true
+        [ "${NET_NOISE:-}" = "cpu" ] && pkill -9 -f "stress-ng" 2>/dev/null || true
     fi
     kill $puretime_pid 2>/dev/null || true
     wait $puretime_pid 2>/dev/null || true
@@ -413,6 +434,9 @@ run_network_experiment() {
 
     # Save results to CSV (container_count 열 = iperf3 -P flows)
     save_puretime_results "$puretime_result" "network" "$flows" "$iteration"
+    local puretime_noattr=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" --no-attribution)
+    save_puretime_results "$puretime_noattr" "network" "$flows" "$iteration" "$RESULTS_NOATTR_FILE"
+    cp "$trace_file" "$OUTPUT_DIR/trace_net_${flows}_${iteration}.jsonl" 2>/dev/null || true
 
     # Cleanup
     stop_containers
@@ -466,6 +490,9 @@ run_block_io_experiment() {
 
     local puretime_result=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file")
     save_puretime_results "$puretime_result" "block_io" "$jobs" "$iteration"
+    local puretime_noattr=$(python3 "$MAKESPAN" "$trace_file" -c "$cgroup_file" --no-attribution)
+    save_puretime_results "$puretime_noattr" "block_io" "$jobs" "$iteration" "$RESULTS_NOATTR_FILE"
+    cp "$trace_file" "$OUTPUT_DIR/trace_block_${jobs}_${iteration}.jsonl" 2>/dev/null || true
 
     stop_containers
     rm -f "$HDD_MOUNT"/blkstress* 2>/dev/null

@@ -109,8 +109,9 @@ class PendingSoftirq:
 class NoiseFreeAnalyzer:
     """Noise-Free Makespan 분석기"""
 
-    def __init__(self, min_events: int = 100):
+    def __init__(self, min_events: int = 100, no_attribution: bool = False):
         self.min_events = min_events
+        self.no_attribution = no_attribution   # R-04 ablation: True면 owner 체크 없이 self+other 모든 대기 차감(Blocked-Samples식)
 
         # Ring buffer 유실 카운트 (loader가 기록한 trace_summary trailer에서 읽음)
         self.dropped_events: int = 0
@@ -294,18 +295,21 @@ class NoiseFreeAnalyzer:
             # 그게 다른 컨테이너면 선행 슬라이스 [my_enqueue, 다음 switch-in)도 내 wait이다.
             # 종료를 '다음 switch-in'으로 한정해 과다 차감을 피한다(단일코어 핀 가정에서 정확;
             # 그 사이 비기록 root 점유가 끼면 최대 한 구간 과대계상 가능).
-            if left > 0 and history[left - 1][1]['cgroup_id'] != cgroup_id:
+            if left > 0 and (self.no_attribution or history[left - 1][1]['cgroup_id'] != cgroup_id):
                 lead_end = history[left][0] if left < right else timestamp
                 self.cgroup_waits[cgroup_id].add_cpu_wait(my_enqueue_ts, lead_end)
 
             for i in range(left, right):
                 other_switch_ts, hist_event = history[i]
                 other_cgroup = hist_event['cgroup_id']
-
-                # 다른 cgroup이 switch-in한 경우
-                if other_cgroup != cgroup_id:
-                    # Wait 구간: 다른 프로세스 switch-in 시점 ~ 내 switch-in 시점
-                    self.cgroup_waits[cgroup_id].add_cpu_wait(other_switch_ts, timestamp)
+                # CPU는 slice 단위 귀속: 코어는 배타 점유라 다음 switch-in이 이 슬라이스의 끝을
+                # 정확히 구획한다 → foreign이 실제 점유한 슬라이스만 charge. 단일스레드 victim은
+                # 창 안에 자기 이벤트가 없어 span 방식과 결과 동일; 멀티워커 victim에서만
+                # sibling 슬라이스(같은 cgroup, 노이즈 아님)가 창에 삼켜지는 과다차감을 막는다.
+                # (net/block은 큐 서비스가 파이프라인이라 FCFS-span 유지 — 다음 이벤트가 점유 종료가 아님.)
+                slice_end = history[i + 1][0] if i + 1 < right else timestamp
+                if self.no_attribution or other_cgroup != cgroup_id:
+                    self.cgroup_waits[cgroup_id].add_cpu_wait(other_switch_ts, min(slice_end, timestamp))
 
         # 모든 switch를 CPU 히스토리에 기록 (다른 프로세스의 Wait 계산용)
         self.cpu_switch_history[cpu].append((timestamp, {
@@ -344,8 +348,8 @@ class NoiseFreeAnalyzer:
                 other_dequeue_ts, hist_event = self.net_dequeue_history[i]
                 other_cgroup = hist_event['cgroup_id']
 
-                # 다른 cgroup 패킷이 dequeue된 경우
-                if other_cgroup != my_packet.cgroup_id:
+                # 다른 cgroup 패킷이 dequeue된 경우 (no_attribution이면 self도)
+                if self.no_attribution or other_cgroup != my_packet.cgroup_id:
                     # Wait 구간: 다른 패킷 dequeue 시점 ~ 내 패킷 dequeue 시점
                     self.cgroup_waits[my_packet.cgroup_id].add_net_wait(other_dequeue_ts, timestamp)
 
@@ -389,7 +393,7 @@ class NoiseFreeAnalyzer:
             # 선행 슬라이스(CPU-3와 동일 원리): insert 직전 마지막 issue가 다른 cgroup이면
             # 그 foreign 요청이 서비스 중이라 내 요청은 insert부터 큐에서 대기한 것 →
             # [insert, 다음 issue)도 내 wait. (foreign 시점부터만 세던 과소계상 교정.)
-            if left > 0 and self.block_issue_history[left - 1][1]['cgroup_id'] != my_request.cgroup_id:
+            if left > 0 and (self.no_attribution or self.block_issue_history[left - 1][1]['cgroup_id'] != my_request.cgroup_id):
                 lead_end = self.block_issue_history[left][0] if left < right else timestamp
                 self.cgroup_waits[my_request.cgroup_id].add_bio_wait(my_insert_ts, lead_end)
 
@@ -397,8 +401,8 @@ class NoiseFreeAnalyzer:
                 other_issue_ts, hist_event = self.block_issue_history[i]
                 other_cgroup = hist_event['cgroup_id']
 
-                # 다른 cgroup 요청이 issue된 경우
-                if other_cgroup != my_request.cgroup_id:
+                # 다른 cgroup 요청이 issue된 경우 (no_attribution이면 self도)
+                if self.no_attribution or other_cgroup != my_request.cgroup_id:
                     # Wait 구간: 다른 요청 issue 시점 ~ 내 요청 issue 시점
                     self.cgroup_waits[my_request.cgroup_id].add_bio_wait(other_issue_ts, timestamp)
 
@@ -477,7 +481,10 @@ class NoiseFreeAnalyzer:
             # softirq_other는 softirq 창의 timestamp로 만들어져 이 cgroup 범위 밖에
             # 놓일 수 있으므로, span 밖 부분을 잘라내야 과다차감(음수 makespan)을 막는다.
             span = P.closedopen(first_ts, last_ts)
-            all_wait = waits.total_unique_wait() & span
+            wait_union = waits.total_unique_wait()
+            if self.no_attribution:
+                wait_union = wait_union | waits.softirq_self   # attribution off면 softirq self도 차감
+            all_wait = wait_union & span
             unique_wait = interval_sum(all_wait)
 
             wait_cpu = interval_sum(waits.cpu & span)
@@ -607,6 +614,11 @@ def main():
         type=str,
         help='Path to file containing cgroup IDs (one per line)'
     )
+    parser.add_argument(
+        '--no-attribution',
+        action='store_true',
+        help='R-04 ablation: owner 체크 없이 self+other 모든 대기를 차감(Blocked-Samples식). 귀속 기능의 가치 비교용.'
+    )
 
     args = parser.parse_args()
 
@@ -615,7 +627,7 @@ def main():
     if args.cgroups_file:
         target_cgroups = load_cgroups_from_file(args.cgroups_file)
 
-    analyzer = NoiseFreeAnalyzer(min_events=args.min_events)
+    analyzer = NoiseFreeAnalyzer(min_events=args.min_events, no_attribution=args.no_attribution)
     try:
         results = analyzer.analyze_file(args.trace_file, target_cgroups)
     except ValueError as e:

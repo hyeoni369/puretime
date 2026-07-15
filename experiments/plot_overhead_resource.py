@@ -34,9 +34,9 @@ XLAB = {
 C_CPU = "#4e79a7"     # muted blue (Tableau)
 C_MEM = "#7b3f99"     # muted purple (ring buffer)
 C_MEM2 = "#c9aed6"    # light purple (base)
-LBL_FS = 12
-TICK_FS = 10.5
-BAR_FS = 11.5
+LBL_FS = 14
+TICK_FS = 12.5
+BAR_FS = 12.5
 REF_FS = 9.5
 
 
@@ -59,7 +59,7 @@ def main():
     args = ap.parse_args()
     d = load(args.data)
 
-    fig, ax = plt.subplots(figsize=(13, 3.4))
+    fig, ax = plt.subplots(figsize=(13, 2.7))
     # CPU 7 victim (노드 코어 %)
     cpu_node = [float(np.mean(d[v]["cpu_node"])) for v in VICTIMS]
     xs_cpu = list(range(len(VICTIMS)))
@@ -88,7 +88,7 @@ def main():
     ax.tick_params(axis="y", labelsize=TICK_FS)
     ax.axvline(len(VICTIMS) - 0.2, color="#9e9e9e", ls=":", lw=1.0, zorder=1)   # CPU | Memory 구분
     ax.grid(axis="y", ls=":", alpha=0.4, zorder=0)
-    ax.legend(fontsize=11, framealpha=0.95, loc="upper right")
+    ax.legend(fontsize=12.5, framealpha=0.95, loc="upper right")
     fig.tight_layout()
     os.makedirs(args.out, exist_ok=True)
     p = os.path.join(args.out, f"overhead_resource.{args.format}")

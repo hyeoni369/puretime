@@ -78,8 +78,11 @@ def main():
         ys = [d[s][1] for s in strengths]
         lo = [d[s][2] for s in strengths]
         hi = [d[s][3] for s in strengths]
-        ax.fill_between(xs, lo, hi, color=color, alpha=0.15, zorder=2)
-        ax.plot(xs, ys, marker + "-", color=color, ms=7, lw=2.0, label=label, zorder=3)
+        ax.fill_between(xs, lo, hi, color=color, alpha=0.12, zorder=2)
+        # IQR 캡 오차막대(R-06/R-17: 강도별 개별 호출 분산 명시). 낮을수록 removal이 안정적.
+        yerr = [[y - l for y, l in zip(ys, lo)], [h - y for y, h in zip(ys, hi)]]
+        ax.errorbar(xs, ys, yerr=yerr, fmt=marker + "-", color=color, ms=7, lw=2.0,
+                    capsize=3, elinewidth=1.0, label=label, zorder=3)
 
     plot_line(cpu, ["1", "3", "7"], "#1565c0", "o", "CPU (1.8–3.0×)")
     plot_line(net, ["4", "6", "8"], "#2e7d32", "s", "Network (4.7–8.4×)")

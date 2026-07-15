@@ -62,7 +62,7 @@ def main():
     df["victim"] = df["victim"].astype(str).str.strip('"')
     vics = [v for v in ORDER if v in df["victim"].unique()]
 
-    fig, ax = plt.subplots(figsize=(13, 3.4))
+    fig, ax = plt.subplots(figsize=(13, 2.7))
     x = np.arange(len(vics))
     w = 0.34
     for i, v in enumerate(vics):
@@ -80,11 +80,11 @@ def main():
 
     ax.axhline(100, color="#333", lw=1.0, ls="--", zorder=1)
     ax.set_xticks(x)
-    ax.set_xticklabels([VLABEL[v] for v in vics], fontsize=10.5)
-    ax.set_ylabel("Execution time\n(% of PureTime-OFF)", fontsize=11.5)
-    ax.tick_params(axis="y", labelsize=10)
+    ax.set_xticklabels([VLABEL[v] for v in vics], fontsize=12.5)
+    ax.set_ylabel("Execution time\n(% of PureTime-OFF)", fontsize=13.5)
+    ax.tick_params(axis="y", labelsize=12)
     ax.set_ylim(70, 130)   # 100%가 중앙, ON/OFF 차이는 60%p 범위 안에서 미미하게
-    ax.legend(fontsize=9.5, loc="upper center", ncol=2, framealpha=0.92)
+    ax.legend(fontsize=12.5, loc="upper center", ncol=2, framealpha=0.92)
     fig.tight_layout()
 
     os.makedirs(args.out, exist_ok=True)

@@ -43,26 +43,37 @@ def stats(path, rt, cc):
     pp = [(x.t_e2e_ms - x.t_puretime_ms) / (x.t_e2e_ms - sbi.loc[x.iteration]) * 100
           for _, x in noisy.iterrows()
           if x.iteration in sbi.index and x.t_e2e_ms > sbi.loc[x.iteration]]
+    def iqr(a):
+        return (np.percentile(a, 25), np.percentile(a, 75)) if a else (float('nan'), float('nan'))
     return (np.median(ns) if ns else float('nan'),
             np.median(ps) if ps else float('nan'),
-            np.median(pp) if pp else float('nan'))
+            np.median(pp) if pp else float('nan'),
+            iqr(ns), iqr(ps))
 
 
 def main():
     labels = [v[3] for v in V]
-    noisy_n, pt_n, effs = [], [], []
+    noisy_n, pt_n, effs, noisy_iqr, pt_iqr = [], [], [], [], []
     for path, rt, cc, _ in V:
-        nn, pn, e = stats(path, rt, cc)
-        noisy_n.append(nn); pt_n.append(pn); effs.append(e)
+        nn, pn, e, niqr, piqr = stats(path, rt, cc)
+        noisy_n.append(nn); pt_n.append(pn); effs.append(e); noisy_iqr.append(niqr); pt_iqr.append(piqr)
+    # IQR 오차막대 (개별 호출 분산; median 기준 하/상). R-06/R-17: 평균 뒤 분포를 명시.
+    noisy_err = [[max(0.0, m - lo) for m, (lo, hi) in zip(noisy_n, noisy_iqr)],
+                 [max(0.0, hi - m) for m, (lo, hi) in zip(noisy_n, noisy_iqr)]]
+    pt_err = [[max(0.0, m - lo) for m, (lo, hi) in zip(pt_n, pt_iqr)],
+              [max(0.0, hi - m) for m, (lo, hi) in zip(pt_n, pt_iqr)]]
 
     x = np.arange(len(V)); w = 0.28
     c_bl, c_no, c_pt = '#9aa0a6', '#d9534f', '#3a7ca5'
     fig, ax = plt.subplots(figsize=(17, 3.5))
     ax.bar(x - w, [1] * len(V), w, label='Baseline (solo)', color=c_bl, edgecolor='white', linewidth=0.5)
-    ax.bar(x,     noisy_n,       w, label='Noisy',          color=c_no, edgecolor='white', linewidth=0.5)
-    ax.bar(x + w, pt_n,          w, label='PureTime',       color=c_pt, edgecolor='white', linewidth=0.5)
+    ax.bar(x,     noisy_n,       w, label='Noisy',          color=c_no, edgecolor='white', linewidth=0.5,
+           yerr=noisy_err, capsize=4.5, error_kw=dict(lw=1.6, ecolor='#222'))
+    ax.bar(x + w, pt_n,          w, label='PureTime',       color=c_pt, edgecolor='white', linewidth=0.5,
+           yerr=pt_err, capsize=4.5, error_kw=dict(lw=1.6, ecolor='#222'))
     for i in range(len(V)):
-        ax.annotate(f"{effs[i]:.0f}%", (x[i] + w, pt_n[i]), xytext=(0, 4),
+        # 숫자를 IQR 위 whisker 위로 (겹침 방지)
+        ax.annotate(f"{effs[i]:.0f}%", (x[i] + w, pt_n[i] + pt_err[1][i]), xytext=(0, 5),
                     textcoords='offset points', ha='center', fontsize=14, color=c_pt, fontweight='bold')
     ax.axhline(1, ls='--', color='#555', lw=1.4, alpha=0.7)
     ax.set_xticks(x)
@@ -70,7 +81,7 @@ def main():
     ax.set_ylabel('Normalized\nmakespan (solo=1)', fontsize=15)
     ax.set_ylim(0, max(noisy_n) * 1.12)
     ax.tick_params(axis='y', labelsize=13)
-    ax.legend(loc='upper left', fontsize=14, ncol=3, frameon=True, columnspacing=1.0, handletextpad=0.5)
+    ax.legend(loc='upper left', fontsize=15.5, ncol=3, frameon=True, columnspacing=1.0, handletextpad=0.5)
     ax.spines[['top', 'right']].set_visible(False)
     plt.tight_layout()
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figures', 'accuracy_normalized.pdf')
